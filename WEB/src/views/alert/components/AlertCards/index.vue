@@ -91,6 +91,7 @@ import { useMessage } from '@/hooks/web/useMessage';
 import { Icon } from '@/components/Icon';
 import moment from 'moment';
 import ALERT from "@/assets/images/alert/alert.png";
+import { queryAlertCameras } from '@/api/device/calculate';
 
 const ListItem = List.Item;
 
@@ -116,6 +117,18 @@ const state = reactive({
 // 表单
 const [registerForm, { validate }] = useForm({
   schemas: [
+    {
+      field: `device_id`,
+      label: `摄像头`,
+      component: 'ApiSelect',
+      componentProps: {
+        api: queryAlertCameras,
+        resultField: 'data',
+        labelField: 'label',
+        valueField: 'value',
+      },
+      defaultValue: '',
+    },
     {
       field: `object`,
       label: `告警对象`,

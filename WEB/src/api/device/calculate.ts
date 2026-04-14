@@ -1,5 +1,6 @@
 import {defHttp} from '@/utils/http/axios';
 import { dedupeRequest } from '@/utils/requestDedupe';
+import { getDeviceList } from '@/api/device/camera';
 
 enum Api {
   Alarm = '/video/alert',
@@ -47,6 +48,30 @@ export const queryAlarmList = async (params) => {
     params,
     1000 // 1秒内相同参数的请求会被去重
   );
+};
+
+// 获取告警筛选摄像头列表
+export const queryAlertCameras = async () => {
+  const res = await getDeviceList({ pageNo: 1, pageSize: 1000 });
+  const deviceList = (res && res.data) ? res.data : [];
+  const cameraOptions = deviceList.map((item) => {
+    const deviceId = item.id;
+    const deviceName = item.name || item.id;
+    return {
+      value: deviceId,
+      label: deviceName && deviceName !== deviceId ? `${deviceName} (${deviceId})` : deviceId,
+      device_id: deviceId,
+      device_name: deviceName,
+    };
+  });
+
+  cameraOptions.sort((a, b) => String(a.label).localeCompare(String(b.label)));
+  return {
+    data: [
+      { value: '', label: '全部摄像头' },
+      ...cameraOptions,
+    ],
+  };
 };
 
 export const deleteAlarm = (id) => {

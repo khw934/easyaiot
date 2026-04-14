@@ -1,4 +1,5 @@
 import {BasicColumn, FormProps} from "@/components/Table";
+import {queryAlertCameras} from "@/api/device/calculate";
 
 export function getBasicColumns(): BasicColumn[] {
   return [
@@ -68,6 +69,18 @@ export function getFormConfig(): Partial<FormProps> {
     labelWidth: 120,
     baseColProps: {span: 6},
     schemas: [
+      {
+        field: `device_id`,
+        label: `摄像头`,
+        component: 'ApiSelect',
+        componentProps: {
+          api: queryAlertCameras,
+          resultField: 'data',
+          labelField: 'label',
+          valueField: 'value',
+        },
+        defaultValue: '',
+      },
       {
         field: `object`,
         label: `告警对象`,
