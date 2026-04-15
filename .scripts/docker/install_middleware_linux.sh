@@ -2024,6 +2024,18 @@ create_all_storage_directories() {
             fi
         fi
     done
+
+    # SRS 容器绑定 ${HOME}/srs_data -> /data（与 docker-compose.yml 一致；避免 macOS 挂载 /data 失败）
+    if [ -n "${HOME:-}" ]; then
+        mkdir -p "${HOME}/srs_data" 2>/dev/null || true
+        if [ "$EUID" -eq 0 ]; then
+            chmod -R 777 "${HOME}/srs_data" 2>/dev/null || true
+        elif command -v sudo &> /dev/null; then
+            sudo chmod -R 777 "${HOME}/srs_data" 2>/dev/null || true
+        else
+            chmod -R 777 "${HOME}/srs_data" 2>/dev/null || true
+        fi
+    fi
     
     if [ $created_count -eq $total_count ]; then
         print_success "所有存储目录已创建并设置为777权限（${created_count}/${total_count}）"

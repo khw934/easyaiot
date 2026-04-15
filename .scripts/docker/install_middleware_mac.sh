@@ -121,6 +121,8 @@ ensure_dirs() {
     "minio_data" "srs_data" "nodered_data"
   )
   for d in "${dirs[@]}"; do mkdir -p "${SCRIPT_DIR}/${d}"; done
+  # SRS 容器绑定 ${HOME}/srs_data -> /data（见 docker-compose.yml），须存在且位于 Docker Desktop 默认可共享路径下
+  mkdir -p "${HOME}/srs_data"
 }
 
 ensure_env() {
