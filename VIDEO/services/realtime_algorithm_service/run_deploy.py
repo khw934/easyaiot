@@ -252,11 +252,63 @@ def _build_absolute_url(maybe_path_or_url: str) -> Optional[str]:
     if maybe_path_or_url.startswith('http://') or maybe_path_or_url.startswith('https://'):
         return maybe_path_or_url
     if maybe_path_or_url.startswith('/'):
+        # 浏览器经前端(如 8888)代理可访问 /api/v1/buckets/...，DEVICE 网关(48080)未必暴露该路径
         base = os.getenv('MODEL_DOWNLOAD_BASE_URL') or os.getenv('GATEWAY_URL') or 'http://localhost:48080'
         if not base.endswith('/'):
             base += '/'
         return urllib.parse.urljoin(base, maybe_path_or_url.lstrip('/'))
     return None
+
+
+def _normalize_minio_endpoint(raw: str) -> str:
+    """Minio 客户端要求 host:port，去掉误配的 scheme。"""
+    s = (raw or '').strip()
+    for prefix in ('https://', 'http://'):
+        if s.lower().startswith(prefix):
+            s = s[len(prefix):]
+    return s.rstrip('/')
+
+
+def _download_model_from_minio_direct(bucket_name: str, object_key: str, local_path: str) -> bool:
+    """
+    在算法服务本机路径落盘（与 AI 服务的 download_model_forVideo 不同：后者写在 AI 容器内，
+    跨容器时算法任务会收到 code=0 但本机文件不存在/为空）。
+    需配置与 AI 模块一致的 MINIO_ENDPOINT / MINIO_ACCESS_KEY / MINIO_SECRET_KEY / MINIO_SECURE。
+    """
+    endpoint = _normalize_minio_endpoint(os.getenv('MINIO_ENDPOINT', '').strip())
+    if not endpoint:
+        return False
+    try:
+        from minio import Minio
+        from minio.error import S3Error
+    except ImportError:
+        logger.warning('未安装 minio 包，跳过直连 MinIO 下载')
+        return False
+    access_key = os.getenv('MINIO_ACCESS_KEY', 'minioadmin')
+    secret_key = os.getenv('MINIO_SECRET_KEY', 'minioadmin')
+    secure = os.getenv('MINIO_SECURE', 'false').lower() == 'true'
+    os.makedirs(os.path.dirname(local_path), exist_ok=True)
+    tmp_path = f"{local_path}.minio.tmp"
+    try:
+        client = Minio(endpoint, access_key=access_key, secret_key=secret_key, secure=secure)
+        client.fget_object(bucket_name, object_key, tmp_path)
+        if _is_valid_model_file(tmp_path):
+            os.replace(tmp_path, local_path)
+            return _is_valid_model_file(local_path)
+        logger.warning(f"直连MinIO下载后文件无效: {tmp_path}")
+        return False
+    except S3Error as e:
+        logger.warning(f"直连MinIO下载失败(S3): bucket={bucket_name}, object={object_key}, error={e}")
+        return False
+    except Exception as e:
+        logger.warning(f"直连MinIO下载失败: bucket={bucket_name}, object={object_key}, error={e}")
+        return False
+    finally:
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
 
 
 def _download_url_to_file(url: str, dst_path: str, timeout=(5, 300)) -> bool:
@@ -359,10 +411,13 @@ def download_model_file(model_id: int, model_path: str) -> Optional[str]:
                     logger.info(f"模型文件已存在，跳过下载: {local_path}")
                     return local_path
 
-                # 从MinIO下载（需要调用AI模块的服务或直接使用MinIO客户端）
+                # 优先本容器直连 MinIO（跨容器调用 AI 的 destination_path 会落在 AI 容器，导致本机文件始终无效）
                 logger.info(f"开始从MinIO下载模型文件: bucket={bucket_name}, object={object_key}")
-                # TODO: 实现MinIO下载逻辑
-                # 这里可以调用AI模块的API或直接使用MinIO客户端
+                if _download_model_from_minio_direct(bucket_name, object_key, local_path):
+                    logger.info(
+                        f"✅ 直连MinIO下载模型成功: {local_path} (size={os.path.getsize(local_path)})")
+                    return local_path
+
                 import requests
                 import os as os_module
                 ai_service_url = os_module.getenv('AI_SERVICE_URL', 'http://localhost:5000')
