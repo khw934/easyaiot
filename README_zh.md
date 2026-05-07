@@ -580,31 +580,31 @@ EasyAIoT是一个开源学习项目，与商业行为无关。用户在使用该
 </thead>
 <tbody>
 <tr style="background-color: #f8f9fa;">
-<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;"><span style="white-space: nowrap;">℡夏别</span></td>
+<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;"><nobr>℡夏别</nobr></td>
 <td style="padding: 15px; border: 1px solid #e0e0e0; color: #444; line-height: 1.8;">为推动EasyAIoT项目贡献Windows部署文档，为Windows平台用户提供了完整的部署指南，大大降低了Windows环境下的部署难度，让更多用户能够便捷地使用EasyAIoT平台。</td>
 </tr>
 <tr>
-<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;"><span style="white-space: nowrap;">YiYaYiYaho</span></td>
+<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;"><nobr>YiYaYiYaho</nobr></td>
 <td style="padding: 15px; border: 1px solid #e0e0e0; color: #444; line-height: 1.8;">为推动EasyAIoT项目贡献Mac容器一键部署脚本，为Mac平台用户提供了自动化部署解决方案，显著简化了Mac环境下的部署流程，提升了开发者和用户的部署体验。</td>
 </tr>
 <tr style="background-color: #f8f9fa;">
-<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;"><span style="white-space: nowrap;">山寒</span></td>
+<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;"><nobr>山寒</nobr></td>
 <td style="padding: 15px; border: 1px solid #e0e0e0; color: #444; line-height: 1.8;">为推动EasyAIoT项目贡献Linux容器部署脚本，为Linux平台用户提供了容器化部署方案，实现了快速、可靠的容器部署，为生产环境的稳定运行提供了重要保障。</td>
 </tr>
 <tr>
-<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;"><span style="white-space: nowrap;">玖零。</span></td>
+<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;"><nobr>玖零。</nobr></td>
 <td style="padding: 15px; border: 1px solid #e0e0e0; color: #444; line-height: 1.8;">为推动EasyAIoT项目贡献Linux容器部署脚本，进一步完善了Linux平台的容器化部署方案，为不同Linux发行版用户提供了更多选择，推动了项目的跨平台部署能力。</td>
 </tr>
 <tr style="background-color: #f8f9fa;">
-<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;"><span style="white-space: nowrap;">爱吃小柚子</span></td>
+<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;"><nobr>爱吃小柚子</nobr></td>
 <td style="padding: 15px; border: 1px solid #e0e0e0; color: #444; line-height: 1.8;">为推动EasyAIoT项目在视频监控与智能分析方向的发展，主导并完成国标 GB28181 与 AI 业务流程的端到端联调与验证测试；同时承担画面清晰度与播放流畅度的专项测试与评估，为国标接入可靠性、链路稳定性以及视频观感体验的持续优化提供了重要依据。</td>
 </tr>
 <tr>
-<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;"><span style="white-space: nowrap;">Dark</span></td>
+<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;"><nobr>Dark</nobr></td>
 <td style="padding: 15px; border: 1px solid #e0e0e0; color: #444; line-height: 1.8;">为推动EasyAIoT项目在国标视频监控方向的发展，贡献 GB28181 能力的端到端打通，实现视频播放与云台控制，使国标设备接入具备可用的实况预览与远程操控能力。</td>
 </tr>
 <tr style="background-color: #f8f9fa;">
-<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;"><span style="white-space: nowrap;">machh</span></td>
+<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;"><nobr>machh</nobr></td>
 <td style="padding: 15px; border: 1px solid #e0e0e0; color: #444; line-height: 1.8;">为推动 EasyAIoT-Edge 项目的发展，完成摄像头接入与 AI 能力的端到端跑通，并实现功能串联，使边缘侧「接入—智能分析」链路可用、可闭环。</td>
 </tr>
 </tbody>
