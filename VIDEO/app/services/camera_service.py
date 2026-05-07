@@ -21,7 +21,7 @@ from onvif import ONVIFCamera
 from wsdiscovery import WSDiscovery, Scope
 
 from app.services.onvif_service import OnvifCamera
-from app.utils.ip_utils import IpReachabilityMonitor
+from app.utils.ip_utils import IpReachabilityMonitor, resolve_ipv4_for_stream_urls
 from models import Device, db, DeviceDetectionRegion
 
 # 全局变量定义
@@ -325,6 +325,53 @@ def _get_local_ipv4_addresses() -> list[str]:
         seen.add(ip)
         result.append(ip)
     return result
+
+
+def _get_host_ip_for_stream_urls() -> str:
+    """解析用于 RTMP/HTTP 播放与 AI 流地址中的宿主机 IP。
+
+    Docker ``network_mode: host`` 下与宿主机同网卡；优先 ``netifaces`` + Linux 默认路由，
+    避免 hostname/Docker 桥接地址误判。
+
+    优先级：环境变量 POD_IP > netifaces（默认路由网卡 / 私网优先）> getaddrinfo+UDP 补充 >
+    UDP 出口探测 > 127.0.0.1。
+    """
+    explicit = (os.getenv('POD_IP') or '').strip()
+    if explicit:
+        return explicit
+
+    ip_nf = resolve_ipv4_for_stream_urls()
+    if ip_nf:
+        return ip_nf
+
+    for ip in _get_local_ipv4_addresses():
+        if ip.startswith('169.254.'):
+            continue
+        return ip
+
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.connect(('8.8.8.8', 80))
+        ip = sock.getsockname()[0]
+        sock.close()
+        if ip and ip != '127.0.0.1' and not ip.startswith('169.254.'):
+            return ip
+    except Exception:
+        pass
+
+    logger.warning('无法探测宿主机 IP，流地址中的主机名将回退为 127.0.0.1')
+    return '127.0.0.1'
+
+
+def _default_stream_urls(device_id: str) -> tuple[str, str, str, str]:
+    """直连/默认场景下生成 live 与 ai 的 RTMP、HTTP-FLV 地址（使用宿主机 IP）。"""
+    host = _get_host_ip_for_stream_urls()
+    return (
+        f'rtmp://{host}:1935/live/{device_id}',
+        f'http://{host}:8080/live/{device_id}.flv',
+        f'rtmp://{host}:1935/ai/{device_id}',
+        f'http://{host}:8080/ai/{device_id}.flv',
+    )
 
 
 def _parse_discovery_ports() -> list[int]:
@@ -689,13 +736,8 @@ def _generate_stream_urls(source: str, device_id: str) -> tuple[str, str, str, s
             
             return rtmp_stream, http_stream, ai_rtmp_stream, ai_http_stream
         else:
-            # 如果解析失败，使用默认格式
-            server = '127.0.0.1'
-            rtmp_stream = f"rtmp://{server}:1935/live/{device_id}"
-            http_stream = f"http://{server}:8080/live/{device_id}.flv"
-            ai_rtmp_stream = f"rtmp://{server}:1935/ai/{device_id}"
-            ai_http_stream = f"http://{server}:8080/ai/{device_id}.flv"
-            return rtmp_stream, http_stream, ai_rtmp_stream, ai_http_stream
+            # 如果解析失败，使用默认格式（宿主机 IP）
+            return _default_stream_urls(device_id)
     elif is_http:
         # HTTP地址格式：http://ip:port/path 或 https://ip:port/path
         http_pattern = r'(https?)://([^:/]+)(?::(\d+))?(?:/(.*))?'
@@ -717,22 +759,11 @@ def _generate_stream_urls(source: str, device_id: str) -> tuple[str, str, str, s
             
             return rtmp_stream, http_stream, ai_rtmp_stream, ai_http_stream
         else:
-            # 如果解析失败，使用默认格式
-            server = '127.0.0.1'
-            rtmp_stream = f"rtmp://{server}:1935/live/{device_id}"
-            http_stream = f"http://{server}:8080/live/{device_id}.flv"
-            ai_rtmp_stream = f"rtmp://{server}:1935/ai/{device_id}"
-            ai_http_stream = f"http://{server}:8080/ai/{device_id}.flv"
-            return rtmp_stream, http_stream, ai_rtmp_stream, ai_http_stream
+            # 如果解析失败，使用默认格式（宿主机 IP）
+            return _default_stream_urls(device_id)
     else:
-        # RTSP流，使用设备ID生成默认地址
-        server = '127.0.0.1'
-        rtmp_stream = f"rtmp://{server}:1935/live/{device_id}"
-        http_stream = f"http://{server}:8080/live/{device_id}.flv"
-        # AI流地址使用不同的路径前缀
-        ai_rtmp_stream = f"rtmp://{server}:1935/ai/{device_id}"
-        ai_http_stream = f"http://{server}:8080/ai/{device_id}.flv"
-        return rtmp_stream, http_stream, ai_rtmp_stream, ai_http_stream
+        # RTSP流，使用设备ID与宿主机 IP 生成默认地址
+        return _default_stream_urls(device_id)
 
 
 def register_camera_by_onvif(ip: str, port: int, password: str) -> str:
@@ -814,10 +845,7 @@ def register_camera_by_onvif(ip: str, port: int, password: str) -> str:
     if source:
         rtmp_stream, http_stream, ai_rtmp_stream, ai_http_stream = _generate_stream_urls(source, device_id)
     else:
-        rtmp_stream = f"rtmp://127.0.0.1:1935/live/{device_id}"
-        http_stream = f"http://127.0.0.1:8080/live/{device_id}.flv"
-        ai_rtmp_stream = f"rtmp://127.0.0.1:1935/ai/{device_id}"
-        ai_http_stream = f"http://127.0.0.1:8080/ai/{device_id}.flv"
+        rtmp_stream, http_stream, ai_rtmp_stream, ai_http_stream = _default_stream_urls(device_id)
     
     camera = Device(
         id=device_id,
@@ -994,10 +1022,7 @@ def register_camera_by_onvif_with_credentials(
     if source:
         rtmp_stream, http_stream, ai_rtmp_stream, ai_http_stream = _generate_stream_urls(source, device_id)
     else:
-        rtmp_stream = f"rtmp://127.0.0.1:1935/live/{device_id}"
-        http_stream = f"http://127.0.0.1:8080/live/{device_id}.flv"
-        ai_rtmp_stream = f"rtmp://127.0.0.1:1935/ai/{device_id}"
-        ai_http_stream = f"http://127.0.0.1:8080/ai/{device_id}.flv"
+        rtmp_stream, http_stream, ai_rtmp_stream, ai_http_stream = _default_stream_urls(device_id)
 
     camera = Device(
         id=device_id,
@@ -1263,10 +1288,7 @@ def register_camera(register_info: dict) -> str:
     if source:
         rtmp_stream, http_stream, ai_rtmp_stream, ai_http_stream = _generate_stream_urls(source, id)
     else:
-        rtmp_stream = f"rtmp://127.0.0.1:1935/live/{id}"
-        http_stream = f"http://127.0.0.1:8080/live/{id}.flv"
-        ai_rtmp_stream = f"rtmp://127.0.0.1:1935/ai/{id}"
-        ai_http_stream = f"http://127.0.0.1:8080/ai/{id}.flv"
+        rtmp_stream, http_stream, ai_rtmp_stream, ai_http_stream = _default_stream_urls(id)
     
     camera = Device(
         id=id,  # 显式设置ID，确保使用传入的ID或生成的唯一ID
