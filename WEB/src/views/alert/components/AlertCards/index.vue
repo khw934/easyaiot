@@ -28,7 +28,9 @@
             <ListItem class="alert-item normal">
               <div class="alert-info">
                 <div class="title-wrapper">
-                <div class="title o2">{{ item.event || '未知事件' }}</div>
+                  <div class="title o2">
+                    <span class="event-name">{{ item.event || '未知事件' }}</span>
+                  </div>
                   <span class="task-type-tag" :class="getTaskTypeClass(item)">
                     {{ getTaskTypeText(item) }}
                   </span>
@@ -62,7 +64,7 @@
                   <div class="btn" @click="handleCopy(item)">
                     <Icon icon="tdesign:copy-filled" :size="15" color="#3B82F6" />
                   </div>
-                  <div class="btn" @click="handleViewImage(item)" v-if="item.image_url || item.image_path">
+                  <div class="btn" @click="handleViewImage(item)" v-if="item.image_url">
                     <Icon icon="ion:image-sharp" :size="15" color="#3B82F6" />
                   </div>
                   <div class="btn" @click="handleViewVideo(item)" v-if="item.device_id && item.time && !isSnapTask(item)">
@@ -71,7 +73,7 @@
                 </div>
               </div>
               <div class="alert-img">
-                <img :src="ALERT"alt="" class="img">
+                <img :src="thumbUrl(item.image_url) || ALERT" alt="" class="img">
               </div>
             </ListItem>
           </template>
@@ -83,6 +85,7 @@
 
 <script lang="ts" setup>
 import { onMounted, onUnmounted, reactive, ref } from 'vue';
+import { useRouter } from 'vue-router';
 import { List, Spin } from 'ant-design-vue';
 import { BasicForm, useForm } from '@/components/Form';
 import { propTypes } from '@/utils/propTypes';
@@ -92,6 +95,7 @@ import { Icon } from '@/components/Icon';
 import moment from 'moment';
 import ALERT from "@/assets/images/alert/alert.png";
 import { alertCameraSelectProps } from '@/views/alert/Data';
+import { resolveAlertImageDisplayUrl } from '@/utils/alertMinioImage';
 
 const ListItem = List.Item;
 
@@ -104,6 +108,7 @@ const props = defineProps({
 });
 
 const { createMessage } = useMessage();
+const router = useRouter();
 
 // 暴露内部方法
 const emit = defineEmits(['getMethod', 'viewImage', 'viewVideo']);
@@ -114,15 +119,104 @@ const state = reactive({
   loading: true,
 });
 
-// 表单
-const [registerForm, { validate }] = useForm({
+const lastFormParams = ref<Record<string, any>>({});
+
+const page = ref(1);
+const pageSize = ref(8);
+const total = ref(0);
+
+function processFormData(formData: Record<string, any>): Record<string, any> {
+  const processedData = { ...formData };
+  const timeRangeKey = '[begin_datetime, end_datetime]';
+  if (processedData[timeRangeKey] && Array.isArray(processedData[timeRangeKey])) {
+    const [begin, end] = processedData[timeRangeKey];
+    if (begin && typeof begin.format === 'function') {
+      processedData.begin_datetime = begin.format('YYYY-MM-DD HH:mm:ss');
+    } else if (begin) {
+      processedData.begin_datetime = begin;
+    }
+    if (end && typeof end.format === 'function') {
+      processedData.end_datetime = end.format('YYYY-MM-DD HH:mm:ss');
+    } else if (end) {
+      processedData.end_datetime = end;
+    }
+    delete processedData[timeRangeKey];
+  }
+  if (processedData.task_name) {
+    processedData.task_name = String(processedData.task_name).trim();
+    if (!processedData.task_name) delete processedData.task_name;
+  }
+  const route = router.currentRoute.value;
+  if (route.query.task_name && !processedData.task_name) {
+    processedData.task_name = String(route.query.task_name).trim();
+  }
+  if (
+    processedData.device_id !== undefined &&
+    processedData.device_id !== null &&
+    String(processedData.device_id).trim() === ''
+  ) {
+    delete processedData.device_id;
+  }
+  if (
+    processedData.begin_datetime === null ||
+    processedData.begin_datetime === undefined ||
+    processedData.begin_datetime === ''
+  ) {
+    delete processedData.begin_datetime;
+  }
+  if (
+    processedData.end_datetime === null ||
+    processedData.end_datetime === undefined ||
+    processedData.end_datetime === ''
+  ) {
+    delete processedData.end_datetime;
+  }
+  return processedData;
+}
+
+function snapshotFilters(processedData: Record<string, any>): Record<string, any> {
+  const filterParams: Record<string, any> = {};
+  if (processedData.begin_datetime) filterParams.begin_datetime = processedData.begin_datetime;
+  if (processedData.end_datetime) filterParams.end_datetime = processedData.end_datetime;
+  if (processedData.task_name) filterParams.task_name = processedData.task_name;
+  if (processedData.device_id !== undefined && processedData.device_id !== '' && processedData.device_id !== null) {
+    filterParams.device_id = processedData.device_id;
+  }
+  if (processedData.object !== undefined && processedData.object !== null && processedData.object !== '') {
+    filterParams.object = processedData.object;
+  }
+  if (processedData.event !== undefined && processedData.event !== null && processedData.event !== '') {
+    filterParams.event = processedData.event;
+  }
+  return filterParams;
+}
+
+async function handleSubmit() {
+  const formData = await validate();
+  const processedData = processFormData(formData);
+  lastFormParams.value = snapshotFilters(processedData);
+  page.value = 1;
+  await fetch(processedData);
+}
+
+const [registerForm, { validate, setFieldsValue, getFieldsValue }] = useForm({
   schemas: [
+    {
+      field: 'task_name',
+      label: '任务名称',
+      component: 'Input',
+      componentProps: {
+        placeholder: '请输入任务名称（模糊匹配）',
+      },
+      colProps: { span: 8 },
+    },
     {
       field: `device_id`,
       label: `摄像头`,
       component: 'ApiSelect',
       componentProps: alertCameraSelectProps,
       defaultValue: '',
+      colProps: { span: 8 },
     },
     {
       field: `object`,
@@ -213,6 +307,7 @@ const [registerForm, { validate }] = useForm({
         ],
       },
       defaultValue: null,
+      colProps: { span: 8 },
     },
     {
       field: `event`,
@@ -225,6 +320,7 @@ const [registerForm, { validate }] = useForm({
         ]
       },
       defaultValue: null,
+      colProps: { span: 8 },
     },
     {
       field: '[begin_datetime, end_datetime]',
@@ -235,32 +331,28 @@ const [registerForm, { validate }] = useForm({
         placeholder: ['开始时间', '结束时间'],
         showTime: { format: 'HH:mm:ss' },
       },
+      colProps: { span: 8 },
     },
   ],
   labelWidth: 120,
-  baseColProps: { span: 6 },
-  actionColOptions: { span: 6 },
+  baseColProps: { span: 8 },
+  actionColOptions: { span: 8 },
   autoSubmitOnEnter: true,
   submitFunc: handleSubmit,
+  submitOnReset: true,
 });
-
-// 表单提交
-async function handleSubmit() {
-  const formData = await validate();
-  // 处理时间范围参数
-  const timeRangeKey = '[begin_datetime, end_datetime]';
-  if (formData[timeRangeKey] && Array.isArray(formData[timeRangeKey])) {
-    const [begin, end] = formData[timeRangeKey];
-    formData.begin_datetime = begin;
-    formData.end_datetime = end;
-    delete formData[timeRangeKey];
-  }
-  await fetch(formData);
-}
 
 // 自动请求并暴露内部方法
 onMounted(() => {
-  fetch();
+  const route = router.currentRoute.value;
+  if (route.query.task_name) {
+    setFieldsValue({ task_name: route.query.task_name });
+    setTimeout(() => {
+      fetch({ task_name: String(route.query.task_name).trim() });
+    }, 100);
+  } else {
+    fetch();
+  }
   emit('getMethod', fetch);
 });
 
@@ -269,7 +361,13 @@ async function fetch(p = {}) {
   if (api && isFunction(api)) {
     try {
       state.loading = true;
-      const res = await api({ ...params, pageNo: page.value, pageSize: pageSize.value, ...p });
+      const requestParams = {
+        ...params,
+        pageNo: page.value,
+        pageSize: pageSize.value,
+        ...p,
+      };
+      const res = await api(requestParams);
       // 根据表格配置，返回格式为 { alert_list: [...], total: ... }
       data.value = res.alert_list || [];
       total.value = res.total || 0;
@@ -287,10 +385,6 @@ function hideLoading() {
   state.loading = false;
 }
 
-// 分页相关
-const page = ref(1);
-const pageSize = ref(8);
-const total = ref(0);
 const paginationProp = ref({
   showSizeChanger: false,
   showQuickJumper: true,
@@ -305,12 +399,53 @@ const paginationProp = ref({
 function pageChange(p: number, pz: number) {
   page.value = p;
   pageSize.value = pz;
-  fetch();
+
+  const currentFormData = getFieldsValue();
+  const processedData = processFormData(currentFormData);
+  const hasFilterParams = !!(
+    processedData.begin_datetime ||
+    processedData.end_datetime ||
+    processedData.task_name ||
+    processedData.device_id ||
+    processedData.object ||
+    processedData.event
+  );
+
+  let formParams: Record<string, any> = {};
+  if (hasFilterParams) {
+    formParams = { ...processedData };
+    lastFormParams.value = snapshotFilters(processedData);
+  } else if (Object.keys(lastFormParams.value).length > 0) {
+    formParams = { ...lastFormParams.value };
+  }
+
+  fetch(formParams);
 }
 
 function pageSizeChange(_current, size: number) {
   pageSize.value = size;
-  fetch();
+  page.value = 1;
+
+  const currentFormData = getFieldsValue();
+  const processedData = processFormData(currentFormData);
+  const hasFilterParams = !!(
+    processedData.begin_datetime ||
+    processedData.end_datetime ||
+    processedData.task_name ||
+    processedData.device_id ||
+    processedData.object ||
+    processedData.event
+  );
+
+  let formParams: Record<string, any> = {};
+  if (hasFilterParams) {
+    formParams = { ...processedData };
+    lastFormParams.value = snapshotFilters(processedData);
+  } else if (Object.keys(lastFormParams.value).length > 0) {
+    formParams = { ...lastFormParams.value };
+  }
+
+  fetch(formParams);
 }
 
 function formatTime(time: string) {
@@ -401,7 +536,8 @@ async function handleCopyDeviceId(deviceId: string | null | undefined) {
 }
 
 async function handleViewImage(record: object) {
-  if (!record['image_url'] && !record['image_path']) {
+  const r = record as Record<string, any>;
+  if (!r['image_url'] || String(r['image_url']).trim() === '') {
     createMessage.warn('告警图片不存在');
     return;
   }
@@ -433,40 +569,8 @@ async function handleCopy(record: object) {
   createMessage.success('复制成功');
 }
 
-// 图片处理 - 直接使用后台返回的 minio URL
-function getImageUrl(imageUrl: string | null | undefined, imagePath: string | null | undefined): string {
-  // 优先使用 image_url（后台返回的 minio URL）
-  if (imageUrl) {
-    // 如果是完整URL，直接返回
-    if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
-      return imageUrl;
-    }
-    // 如果是MinIO路径（以/api/v1/buckets开头），添加前端启动地址前缀
-    if (imageUrl.startsWith('/api/v1/buckets')) {
-      return `${window.location.origin}${imageUrl}`;
-    }
-    // 其他相对路径，添加前端启动地址前缀
-    if (imageUrl.startsWith('/')) {
-      return `${window.location.origin}${imageUrl}`;
-    }
-    return imageUrl;
-  }
-  
-  // 如果没有 image_url，使用 image_path 作为后备
-  if (imagePath) {
-    if (imagePath.startsWith('http://') || imagePath.startsWith('https://')) {
-      return imagePath;
-    }
-    if (imagePath.startsWith('/api/v1/buckets')) {
-      return `${window.location.origin}${imagePath}`;
-    }
-    if (imagePath.startsWith('/')) {
-      return `${window.location.origin}${imagePath}`;
-    }
-    return imagePath;
-  }
-  
-  return '';
+function thumbUrl(imageUrl: string | null | undefined): string {
+  return resolveAlertImageDisplayUrl(imageUrl);
 }
 </script>
 

@@ -32,6 +32,7 @@ import { ref } from 'vue';
 import { BasicModal, useModalInner } from '@/components/Modal';
 import { Spin, Empty as AEmpty } from 'ant-design-vue';
 import { useMessage } from '@/hooks/web/useMessage';
+import { resolveAlertImageDisplayUrl } from '@/utils/alertMinioImage';
 
 const { createMessage } = useMessage();
 const loading = ref(false);
@@ -42,32 +43,13 @@ const [register, { setModalProps, closeModal }] = useModalInner(async (data) => 
   imageUrl.value = '';
   
   try {
-    // 优先使用 image_url（后台返回的已处理URL）
-    let url = data.image_url;
-
-    // 如果没有 image_url，则使用 image_path 进行处理
-    if (!url && data.image_path) {
-      const imagePath = data.image_path;
-      // 如果是完整URL，直接使用
-      if (imagePath.startsWith('http://') || imagePath.startsWith('https://')) {
-        url = imagePath;
-      } else if (imagePath.startsWith('/api/v1/buckets')) {
-        // 如果是MinIO路径，添加前端启动地址前缀
-        url = `${window.location.origin}${imagePath}`;
-      } else if (imagePath.startsWith('/')) {
-        // 其他相对路径，添加前端启动地址前缀
-        url = `${window.location.origin}${imagePath}`;
-      } else {
-        url = imagePath;
-      }
-    }
+    const url = resolveAlertImageDisplayUrl(data?.image_url);
 
     if (!url) {
-      createMessage.error('图片路径为空');
+      createMessage.error('图片地址为空');
       return;
     }
 
-    // 直接使用URL，不再通过 getAlertImage API 获取
     imageUrl.value = url;
   } catch (error: any) {
     console.error('加载图片失败:', error);

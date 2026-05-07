@@ -55,9 +55,14 @@ public class AlertDO {
     private String deviceName;
 
     /**
-     * 图片路径（MinIO路径或本地路径）
+     * 本地图片路径（算法落盘等）
      */
     private String imagePath;
+
+    /**
+     * MinIO 图片下载地址（/api/v1/buckets/.../objects/download?prefix=...），由 iot-sink 上传后写入
+     */
+    private String imageUrl;
 
     /**
      * 录像路径

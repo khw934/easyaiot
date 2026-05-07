@@ -420,10 +420,10 @@ def process_alert_message(message: Dict):
                     logger.warning(f"告警记录不存在: alert_id={alert_id}")
                     return
                 
-                # 更新数据库中的image_path
-                alert.image_path = minio_path
+                # MinIO 下载地址写入 image_url（与 iot-sink、告警列表 API 一致）
+                alert.image_url = minio_path
                 db.session.commit()
-                logger.debug(f"告警 {alert_id} 图片路径已更新: {minio_path}")
+                logger.debug(f"告警 {alert_id} image_url 已更新: {minio_path}")
         else:
             logger.warning(f"告警 {alert_id} 图片上传失败，保留原始路径: {image_path}")
                 

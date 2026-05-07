@@ -94,9 +94,12 @@ class Alert(db.Model):
     # 与 device.id 一致（GB28181 等设备 ID 可达约 50 字符）
     device_id = db.Column(db.String(100), nullable=False)
     device_name = db.Column(db.String(100), nullable=False)
-    image_path = db.Column(db.String(200), nullable=True)
+    image_path = db.Column(db.String(200), nullable=True, comment='本地图片路径（算法落盘）')
+    image_url = db.Column(db.String(500), nullable=True, comment='MinIO 下载路径（/api/v1/buckets/.../objects/download?prefix=...）')
     record_path = db.Column(db.String(200), nullable=True)
     task_type = db.Column(db.String(20), nullable=True, comment='告警事件类型[realtime:实时算法任务,snap:抓拍算法任务]')
+    task_id = db.Column(db.Integer, nullable=True, comment='关联的任务ID')
+    task_name = db.Column(db.String(255), nullable=True, comment='关联的任务名称')
     # 通知人信息字段（用于追溯）
     notify_users = db.Column(db.Text, nullable=True, comment='通知人列表（JSON格式，格式：[{"phone": "xxx", "email": "xxx", "name": "xxx"}, ...]）')
     channels = db.Column(db.Text, nullable=True, comment='通知渠道配置（JSON格式，格式：[{"method": "sms", "template_id": "xxx"}, ...]）')

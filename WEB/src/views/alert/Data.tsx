@@ -21,17 +21,24 @@ export function getBasicColumns(): BasicColumn[] {
     {
       title: '设备ID',
       dataIndex: 'device_id',
+      key: 'device_id',
       width: 120,
     },
     {
       title: '设备名称',
       dataIndex: 'device_name',
+      key: 'device_name',
       width: 120,
     },
     {
       title: '告警时间',
       dataIndex: 'time',
       width: 120,
+    },
+    {
+      title: '任务名称',
+      dataIndex: 'task_name',
+      width: 150,
     },
     {
       title: '告警事件',
@@ -41,6 +48,7 @@ export function getBasicColumns(): BasicColumn[] {
     {
       title: '任务类型',
       dataIndex: 'task_type',
+      key: 'task_type',
       width: 100,
       customRender: ({text}) => {
         if (!text) {
@@ -82,14 +90,25 @@ export function getBasicColumns(): BasicColumn[] {
 export function getFormConfig(): Partial<FormProps> {
   return {
     labelWidth: 120,
-    baseColProps: {span: 6},
+    baseColProps: {span: 8},
+    actionColOptions: {span: 8},
     schemas: [
+      {
+        field: 'task_name',
+        label: '任务名称',
+        component: 'Input',
+        componentProps: {
+          placeholder: '请输入任务名称（支持模糊匹配）',
+        },
+        colProps: {span: 8},
+      },
       {
         field: `device_id`,
         label: `摄像头`,
         component: 'ApiSelect',
         componentProps: alertCameraSelectProps,
         defaultValue: '',
+        colProps: {span: 8},
       },
       {
         field: `object`,
@@ -178,7 +197,8 @@ export function getFormConfig(): Partial<FormProps> {
             {value: "吹风机", label: "吹风机"},
             {value: "牙刷", label: "牙刷"},
           ]
-        }
+        },
+        colProps: {span: 8},
       },
       {
         field: `event`,
@@ -189,7 +209,8 @@ export function getFormConfig(): Partial<FormProps> {
             {value: null, label: '全部'},
             {value: "行人检测", label: "行人检测"},
           ]
-        }
+        },
+        colProps: {span: 8},
       },
       {
         field: '[begin_datetime, end_datetime]',
@@ -200,6 +221,7 @@ export function getFormConfig(): Partial<FormProps> {
           placeholder: ['开始时间', '结束时间'],
           showTime: { format: 'HH:mm:ss' },
         },
+        colProps: {span: 8},
       },
     ]
   }

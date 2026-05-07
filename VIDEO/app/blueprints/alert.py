@@ -30,24 +30,33 @@ _cache_ttl = 5  # 缓存有效期5秒
 
 
 def api_response(code=200, message="success", data=None):
-    """统一API响应格式"""
+    """统一 API 响应格式（与改造后的前端 axios 解析一致：业务 code 成功为 0，HTTP 统一 200）"""
+    business_code = 0 if code == 200 else code
     response = {
-        "code": code,
+        "code": business_code,
+        "msg": message,
         "message": message,
         "data": data
     }
-    return jsonify(response), code
+    return jsonify(response), 200
 
 
 @alert_bp.route('/page')
 def get_alert_list_route():
     """获取报警列表"""
     try:
-        args_dict = dict(request.args)
+        args_dict = {}
+        for key, value in request.args.items():
+            if isinstance(value, list):
+                args_dict[key] = value[0] if value else None
+            else:
+                args_dict[key] = value
+
+        logger.debug(f'告警列表查询参数: {args_dict}')
         result = get_alert_list(args_dict)
         return api_response(data=result)
     except Exception as e:
-        logger.error(f'获取报警列表失败: {str(e)}')
+        logger.error(f'获取报警列表失败: {str(e)}', exc_info=True)
         return api_response(500, f'获取失败: {str(e)}')
 
 
@@ -55,7 +64,12 @@ def get_alert_list_route():
 def get_alert_count_route():
     """获取报警统计"""
     try:
-        args_dict = dict(request.args)
+        args_dict = {}
+        for key, value in request.args.items():
+            if isinstance(value, list):
+                args_dict[key] = value[0] if value else None
+            else:
+                args_dict[key] = value
         result = get_alert_count(args_dict)
         return api_response(data=result)
     except Exception as e:

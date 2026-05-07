@@ -76,7 +76,7 @@
   </div>
 </template>
 <script lang="ts" setup name="noticeSetting">
-import {reactive, ref} from 'vue';
+import {reactive, ref, onMounted, onActivated} from 'vue';
 import {BasicTable, TableAction, useTable} from '@/components/Table';
 import {useMessage} from '@/hooks/web/useMessage';
 import {getBasicColumns, getFormConfig} from "./Data";
@@ -99,11 +99,38 @@ const state = reactive({
   activeKey: '1',
 });
 
-// 请求api时附带参数
-const params = {};
+const params = ref<Record<string, any>>({});
 
-let cardListReload = () => {
+let cardListReload = () => {};
+
+/** 表格模式下保存的筛选条件（不含分页），翻页时合并 */
+const lastTableFilterParams = ref<Record<string, any>>({});
+
+const refreshData = () => {
+  const route = router.currentRoute.value;
+  if (route.query.task_name) {
+    params.value = {task_name: route.query.task_name};
+    setTimeout(() => {
+      const form = getForm();
+      if (form) {
+        form.setFieldsValue({task_name: route.query.task_name});
+      }
+      reload();
+      cardListReload();
+    }, 100);
+  } else {
+    reload();
+    cardListReload();
+  }
 };
+
+onMounted(() => {
+  refreshData();
+});
+
+onActivated(() => {
+  refreshData();
+});
 
 // 获取内部fetch方法;
 function getMethod(m: any) {
@@ -136,18 +163,8 @@ const {createMessage, createConfirm} = useMessage();
 const [
   registerTable,
   {
-    // setLoading,
-    // setColumns,
-    // getColumns,
-    // getDataSource,
-    // getRawDataSource,
     reload,
-    // getPaginationRef,
-    // setPagination,
-    // getSelectRows,
-    // getSelectRowKeys,
-    // setSelectedRowKeys,
-    // clearSelectedRowKeys,
+    getForm,
   },
 ] = useTable({
   canResize: true,
@@ -161,64 +178,78 @@ const [
   fetchSetting: {
     listField: 'alert_list',
     totalField: 'total',
+    pageField: 'pageNo',
+    sizeField: 'pageSize',
   },
-  beforeFetch: (params) => {
-    // 处理时间范围参数
-    // RangePicker 字段名为 [begin_datetime, end_datetime] 时，返回的可能是数组格式
+  beforeFetch: (p) => {
     const timeRangeKey = '[begin_datetime, end_datetime]';
-    if (params[timeRangeKey] && Array.isArray(params[timeRangeKey])) {
-      const [begin, end] = params[timeRangeKey];
-      params.begin_datetime = begin;
-      params.end_datetime = end;
-      delete params[timeRangeKey];
+    if (p[timeRangeKey] && Array.isArray(p[timeRangeKey])) {
+      const [begin, end] = p[timeRangeKey];
+      if (begin && typeof begin.format === 'function') {
+        p.begin_datetime = begin.format('YYYY-MM-DD HH:mm:ss');
+      } else if (begin) {
+        p.begin_datetime = begin;
+      }
+      if (end && typeof end.format === 'function') {
+        p.end_datetime = end.format('YYYY-MM-DD HH:mm:ss');
+      } else if (end) {
+        p.end_datetime = end;
+      }
+      delete p[timeRangeKey];
     }
-    return params;
+    if (p.begin_datetime && typeof p.begin_datetime === 'object' && typeof (p.begin_datetime as any).format === 'function') {
+      p.begin_datetime = (p.begin_datetime as any).format('YYYY-MM-DD HH:mm:ss');
+    }
+    if (p.end_datetime && typeof p.end_datetime === 'object' && typeof (p.end_datetime as any).format === 'function') {
+      p.end_datetime = (p.end_datetime as any).format('YYYY-MM-DD HH:mm:ss');
+    }
+    if (p.task_name) {
+      p.task_name = String(p.task_name).trim();
+      if (!p.task_name) delete p.task_name;
+    }
+    const route = router.currentRoute.value;
+    if (route.query.task_name && !p.task_name) {
+      p.task_name = String(route.query.task_name).trim();
+    }
+    if (p.begin_datetime === null || p.begin_datetime === undefined || p.begin_datetime === '') {
+      delete p.begin_datetime;
+    }
+    if (p.end_datetime === null || p.end_datetime === undefined || p.end_datetime === '') {
+      delete p.end_datetime;
+    }
+    const hasFilterParams = !!(
+      p.begin_datetime ||
+      p.end_datetime ||
+      p.task_name ||
+      p.device_id ||
+      p.object ||
+      p.event
+    );
+    if (!hasFilterParams && Object.keys(lastTableFilterParams.value).length > 0) {
+      Object.assign(p, lastTableFilterParams.value);
+    } else if (hasFilterParams) {
+      const filterParams: Record<string, any> = {};
+      if (p.begin_datetime) filterParams.begin_datetime = p.begin_datetime;
+      if (p.end_datetime) filterParams.end_datetime = p.end_datetime;
+      if (p.task_name) filterParams.task_name = p.task_name;
+      if (p.device_id !== undefined && p.device_id !== '') filterParams.device_id = p.device_id;
+      if (p.object !== undefined && p.object !== null && p.object !== '') filterParams.object = p.object;
+      if (p.event !== undefined && p.event !== null && p.event !== '') filterParams.event = p.event;
+      lastTableFilterParams.value = filterParams;
+    }
+    return p;
   },
   rowKey: 'id',
 });
 
-// 封装下载工具函数
-const downloadImage = (data, fileName = 'image.png') => {
-  // 二进制数据处理
-  if (data instanceof ArrayBuffer || data instanceof Uint8Array) {
-    const blob = new Blob([data], {type: 'image/png'}) // 可指定具体MIME类型
-    return downloadImage(blob, fileName)
-  }
-
-  // 处理Blob数据
-  if (data instanceof Blob) {
-    const url = URL.createObjectURL(data)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = fileName
-    document.body.appendChild(link)
-    link.click()
-    URL.revokeObjectURL(url)
-    document.body.removeChild(link)
-    return
-  }
-
-  // 处理Base64数据
-  if (data.startsWith('data:image')) {
-    alert(333)
-    const arr = data.split(',')
-    const mime = arr[0].match(/:(.*?);/)[1]
-    const bstr = atob(arr[1])
-    let n = bstr.length
-    const u8arr = new Uint8Array(n)
-    while (n--) u8arr[n] = bstr.charCodeAt(n)
-    downloadImage(new Blob([u8arr], {type: mime}), fileName)
-  }
-}
-
-const handleViewImage = (record) => {
-  if (record['image_url'] == null && record['image_path'] == null) {
+const handleViewImage = (record: Record<string, any>) => {
+  const minioUrl = record['image_url'];
+  if (minioUrl == null || String(minioUrl).trim() === '') {
     createMessage.warn('告警图片不存在');
     return;
   }
   openImageModal(true, {
-    image_url: record['image_url'],
-    image_path: record['image_path'],
+    image_url: minioUrl,
   });
 };
 
@@ -362,7 +393,11 @@ const handleClearAllAlerts = () => {
         reload();
         cardListReload();
       } catch (error: any) {
-        const errorMsg = error?.response?.data?.message || error?.message || '清空告警失败，请稍后重试';
+        const errorMsg =
+          error?.response?.data?.msg ||
+          error?.response?.data?.message ||
+          error?.message ||
+          '清空告警失败，请稍后重试';
         createMessage.error(errorMsg);
       }
     },

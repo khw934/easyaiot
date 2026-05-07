@@ -11,6 +11,7 @@
         <result column="device_id" jdbcType="VARCHAR" property="deviceId"/>
         <result column="device_name" jdbcType="VARCHAR" property="deviceName"/>
         <result column="image_path" jdbcType="VARCHAR" property="imagePath"/>
+        <result column="image_url" jdbcType="VARCHAR" property="imageUrl"/>
         <result column="record_path" jdbcType="VARCHAR" property="recordPath"/>
         <result column="task_type" jdbcType="VARCHAR" property="taskType"/>
         <result column="notify_users" jdbcType="VARCHAR" property="notifyUsers"/>
@@ -20,7 +21,7 @@
     </resultMap>
     
     <sql id="Base_Column_List">
-        id, object, event, region, information, time, device_id, device_name, image_path, record_path, task_type, 
+        id, object, event, region, information, time, device_id, device_name, image_path, image_url, record_path, task_type, 
         notify_users, channels, notification_sent, notification_sent_time
     </sql>
     
@@ -32,7 +33,7 @@
     </select>
     
     <insert id="insert" parameterType="com.basiclab.iot.sink.dal.dataobject.AlertDO" useGeneratedKeys="true" keyProperty="id" keyColumn="id">
-        insert into alert (object, event, region, information, time, device_id, device_name, image_path, record_path, task_type, 
+        insert into alert (object, event, region, information, time, device_id, device_name, image_path, image_url, record_path, task_type, 
                           notify_users, channels, notification_sent, notification_sent_time)
         values (
             #{object,jdbcType=VARCHAR},
@@ -43,6 +44,7 @@
             #{deviceId,jdbcType=VARCHAR},
             #{deviceName,jdbcType=VARCHAR},
             #{imagePath,jdbcType=VARCHAR},
+            #{imageUrl,jdbcType=VARCHAR},
             #{recordPath,jdbcType=VARCHAR},
             #{taskType,jdbcType=VARCHAR},
             #{notifyUsers,jdbcType=VARCHAR},
@@ -54,7 +56,7 @@
     
     <update id="updateImagePath">
         update alert
-        set image_path = #{imagePath,jdbcType=VARCHAR}
+        set image_url = #{imagePath,jdbcType=VARCHAR}
         where id = #{id,jdbcType=INTEGER}
     </update>
 </mapper>

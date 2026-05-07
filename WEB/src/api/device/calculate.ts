@@ -32,7 +32,7 @@ export const queryAlarmList = async (params) => {
   return dedupeRequest(
     async () => {
       const res = await commonApi('get', url, {params}, {}, false);
-      // 后端返回格式: { code: 200, message: "success", data: { alert_list: [], total: 100 } }
+      // 后端返回格式: { code: 0, msg/message: "success", data: { alert_list: [], total: 100 } }
       // 当 isTransformResponse: false 时，返回的是整个 Axios 响应对象，需要访问 res.data 获取实际响应
       // 然后访问 res.data.data 获取实际数据
       if (res && res.data && res.data.data) {
@@ -136,7 +136,7 @@ export const getDashboardStatistics = async () => {
   return dedupeRequest(
     async () => {
       const res = await commonApi('get', url, {}, {}, false);
-      // 后端返回格式: { code: 200, message: "success", data: { alarm_count, today_alarm_count, camera_count, algorithm_count, model_count } }
+      // 后端返回格式: { code: 0, data: { alarm_count, today_alarm_count, ... } }
       if (res && res.data && res.data.data) {
         return res.data.data;
       }

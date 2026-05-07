@@ -112,6 +112,7 @@ import { useMessage } from '@/hooks/web/useMessage'
 import Jessibuca from '@/components/Player/module/jessibuca.vue'
 import DialogPlayer from '@/components/VideoPlayer/DialogPlayer.vue'
 import { useModal } from '@/components/Modal'
+import { resolveAlertImageDisplayUrl } from '@/utils/alertMinioImage'
 
 defineOptions({
   name: 'VideoMonitor'
@@ -580,11 +581,7 @@ const loadAlertRecords = async () => {
     })
     if (response && response.alert_list) {
       alertRecordList.value = response.alert_list.map((item: any) => {
-        // 构建图片URL - 直接使用 image_path
-        let imageUrl = null
-        if (item.image_path) {
-          imageUrl = item.image_path
-        }
+        let imageUrl = resolveAlertImageDisplayUrl(item.image_url) || null
         
         // 如果没有level字段，根据event类型设置默认级别
         let level = item.level || '告警'

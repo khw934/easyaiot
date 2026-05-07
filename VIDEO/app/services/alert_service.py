@@ -22,6 +22,9 @@ def _alert_to_dict(alert: Alert) -> dict:
         'device_name': alert.device_name,
         'image_path': alert.image_path,
         'record_path': alert.record_path,
+        'task_id': alert.task_id if hasattr(alert, 'task_id') else None,
+        # task_name 与列表「任务名称」筛选一致：优先 object（任务展示名），其次独立 task_name 字段
+        'task_name': alert.object if alert.object else (alert.task_name if hasattr(alert, 'task_name') else None),
     }
     
     # 处理 information 字段（如果是 JSON 字符串则解析）
@@ -99,32 +102,99 @@ def _alert_to_dict(alert: Alert) -> dict:
             result['notification_sent_time'] = alert.notification_sent_time
     else:
         result['notification_sent_time'] = None
-    
+
+    # MinIO 图片下载路径（列表与前端展示优先使用）
+    image_url = alert.image_url if hasattr(alert, 'image_url') else ''
+    result['image_url'] = image_url or ''
+
     return result
+
 
 def _get_alert_filter_query(args: dict) -> Query:
     """构建报警查询过滤器"""
-    query: Query = Alert.query
+    # 仅返回已写入 MinIO 地址的记录（image_url 非空）
+    query: Query = Alert.query.filter(
+        Alert.image_url.isnot(None),
+        db.func.trim(Alert.image_url) != ''
+    )
 
     if 'object' in args and args['object']:
-        query = query.filter(Alert.object == args['object'])
+        object_value = args['object'].strip() if isinstance(args['object'], str) else args['object']
+        if object_value:
+            query = query.filter(Alert.object == object_value)
+
     if 'event' in args and args['event']:
-        query = query.filter(Alert.event == args['event'])
+        event_value = args['event'].strip() if isinstance(args['event'], str) else args['event']
+        if event_value:
+            query = query.filter(Alert.event == event_value)
+
     if 'device_id' in args and args['device_id']:
-        query = query.filter(Alert.device_id == args['device_id'])
+        device_id_value = args['device_id'].strip() if isinstance(args['device_id'], str) else args['device_id']
+        if device_id_value:
+            query = query.filter(Alert.device_id == device_id_value)
+
     if 'task_type' in args and args['task_type']:
-        query = query.filter(Alert.task_type == args['task_type'])
+        task_type_value = args['task_type'].strip() if isinstance(args['task_type'], str) else args['task_type']
+        if task_type_value:
+            query = query.filter(Alert.task_type == task_type_value)
+
+    if 'task_id' in args and args['task_id']:
+        try:
+            task_id_value = int(args['task_id'])
+            query = query.filter(Alert.task_id == task_id_value)
+        except (ValueError, TypeError):
+            logger.warning(f'无效的task_id参数: {args["task_id"]}')
+
+    # 任务名称：对 object 字段做模糊匹配（与前端「任务名称」筛选一致）
+    if 'task_name' in args and args['task_name']:
+        task_name_value = args['task_name'].strip() if isinstance(args['task_name'], str) else args['task_name']
+        if task_name_value:
+            query = query.filter(Alert.object.like(f'%{task_name_value}%'))
+
     if 'begin_datetime' in args and args['begin_datetime']:
-        query = query.filter(Alert.time >= datetime.strptime(args['begin_datetime'], '%Y-%m-%d %H:%M:%S'))
+        begin_datetime_value = args['begin_datetime'].strip() if isinstance(args['begin_datetime'], str) else str(
+            args['begin_datetime'])
+        if begin_datetime_value:
+            try:
+                begin_time = None
+                for fmt in ['%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M:%S.%f', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%dT%H:%M:%S.%f']:
+                    try:
+                        begin_time = datetime.strptime(begin_datetime_value, fmt)
+                        break
+                    except ValueError:
+                        continue
+                if begin_time:
+                    query = query.filter(Alert.time >= begin_time)
+                else:
+                    logger.warning(f'无法解析开始时间格式: {begin_datetime_value}')
+            except Exception as e:
+                logger.warning(f'解析开始时间失败: {begin_datetime_value}, 错误: {str(e)}')
+
     if 'end_datetime' in args and args['end_datetime']:
-        query = query.filter(Alert.time <= datetime.strptime(args['end_datetime'], '%Y-%m-%d %H:%M:%S'))
+        end_datetime_value = args['end_datetime'].strip() if isinstance(args['end_datetime'], str) else str(
+            args['end_datetime'])
+        if end_datetime_value:
+            try:
+                end_time = None
+                for fmt in ['%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M:%S.%f', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%dT%H:%M:%S.%f']:
+                    try:
+                        end_time = datetime.strptime(end_datetime_value, fmt)
+                        break
+                    except ValueError:
+                        continue
+                if end_time:
+                    query = query.filter(Alert.time <= end_time)
+                else:
+                    logger.warning(f'无法解析结束时间格式: {end_datetime_value}')
+            except Exception as e:
+                logger.warning(f'解析结束时间失败: {end_datetime_value}, 错误: {str(e)}')
 
     return query
 
 
 def get_alert_list(args: dict) -> dict:
-    """获取报警列表
-    
+    """获取报警列表（仅返回已写入 MinIO 的 image_url 非空记录）
+
     Args:
         args: 查询参数字典，支持以下参数：
             - pageNo: 页码（可选）
@@ -133,9 +203,11 @@ def get_alert_list(args: dict) -> dict:
             - event: 事件类型过滤（可选）
             - device_id: 设备ID过滤（可选）
             - task_type: 任务类型过滤（可选，'realtime'或'snap'）
-            - begin_datetime: 开始时间过滤，格式：'YYYY-MM-DD HH:MM:SS'（可选）
-            - end_datetime: 结束时间过滤，格式：'YYYY-MM-DD HH:MM:SS'（可选）
-    
+            - task_id: 任务ID过滤（可选）
+            - task_name: 任务名称模糊匹配（过滤 object 字段，可选）
+            - begin_datetime: 开始时间过滤（可选，多种 ISO 格式）
+            - end_datetime: 结束时间过滤（可选）
+
     Returns:
         dict: 包含 alert_list 和 total 的字典
     """
@@ -162,20 +234,7 @@ def get_alert_list(args: dict) -> dict:
 
 
 def get_alert_count(args: dict) -> dict:
-    """获取报警统计
-    
-    Args:
-        args: 查询参数字典，支持以下参数：
-            - group: 分组方式，可选值：'date'（按日期）、'device'（按设备）、'object'（按对象）
-            - object: 对象类型过滤（可选）
-            - event: 事件类型过滤（可选）
-            - device_id: 设备ID过滤（可选）
-            - begin_datetime: 开始时间过滤（可选）
-            - end_datetime: 结束时间过滤（可选）
-    
-    Returns:
-        dict: 包含 count_list 和 total_count 的字典
-    """
+    """获取报警统计（与列表一致：仅统计 image_url 已写入 MinIO 的记录，筛选条件同 get_alert_list）"""
     query = _get_alert_filter_query(args)
 
     if 'group' in args and args['group']:
@@ -308,10 +367,18 @@ def create_alert(alert_data: dict) -> dict:
                     channels = None
         else:
             channels = None
+
+        task_id = alert_data.get('task_id')
+        task_name = alert_data.get('task_name')
+
+        # 若传入 task_name，则写入 object（任务展示名）；否则使用 object 字段
+        object_value = alert_data['object']
+        if task_name:
+            object_value = task_name
         
         # 创建报警记录
         alert = Alert(
-            object=alert_data['object'],
+            object=object_value,
             event=alert_data['event'],
             device_id=alert_data['device_id'],
             device_name=alert_data['device_name'],
@@ -319,8 +386,11 @@ def create_alert(alert_data: dict) -> dict:
             information=information,
             time=alert_time,
             image_path=alert_data.get('image_path'),
+            image_url=alert_data.get('image_url'),
             record_path=alert_data.get('record_path'),
             task_type=task_type,
+            task_id=task_id,
+            task_name=task_name,
             notify_users=notify_users,
             channels=channels
         )

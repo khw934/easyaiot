@@ -974,11 +974,11 @@ public class AlertServiceImpl implements AlertService {
     }
 
     /**
-     * 更新数据库中的图片路径
+     * 将 MinIO 下载地址写入 alert.image_url（与库表字段一致；方法名 updateImagePath 为历史保留）
      * 使用@DS("video")注解切换到VIDEO数据库
      *
      * @param alertId 告警ID
-     * @param minioPath MinIO路径
+     * @param minioPath MinIO 对象下载 API 路径
      */
     private void updateAlertImagePath(Integer alertId, String minioPath) {
         if (alertMapper == null) {

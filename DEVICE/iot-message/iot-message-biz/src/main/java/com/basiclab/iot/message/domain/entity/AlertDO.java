@@ -55,9 +55,14 @@ public class AlertDO {
     private String deviceName;
 
     /**
-     * 图片路径（MinIO路径或本地路径）
+     * 本地图片路径
      */
     private String imagePath;
+
+    /**
+     * MinIO 图片下载地址
+     */
+    private String imageUrl;
 
     /**
      * 录像路径
