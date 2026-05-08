@@ -291,6 +291,11 @@ push_queues = {}  # {device_id: queue.Queue}
 device_caps = {}  # {device_id: cv2.VideoCapture | AsyncVideoStream}
 # 摄像头推送进程（FFmpeg进程）
 device_pushers = {}  # {device_id: subprocess.Popen}
+# 固定速率推帧线程：将推帧从主循环解耦，确保匀速推流
+device_output_frames = {}  # {device_id: {'frame': np.ndarray, 'w': int, 'h': int} or None}
+device_output_locks = {}  # {device_id: threading.Lock()}
+device_push_threads = {}  # {device_id: threading.Thread}
+device_push_running = {}  # {device_id: threading.Event()}
 # FFmpeg进程的stderr读取线程和错误信息
 device_pusher_stderr_threads = {}  # {device_id: threading.Thread}
 device_pusher_stderr_buffers = {}  # {device_id: list} 存储stderr输出
@@ -926,7 +931,9 @@ def load_task_config():
                 device_streams[device.id] = {
                     'rtsp_url': rtsp_url,  # 输入流地址
                     'rtmp_url': rtmp_url,  # AI输出流地址
-                    'device_name': device.name or device.id
+                    'device_name': device.name or device.id,
+                    'is_gb28181': bool(device.source and device.source.strip().lower().startswith('gb28181://')),
+                    'original_source': device.source,  # 原始源地址（用于GB28181重连时重新解析）
                 }
                 input_type = "RTSP" if rtsp_url and rtsp_url.startswith(
                     'rtsp://') else "RTMP" if rtsp_url and rtsp_url.startswith('rtmp://') else "输入流"
@@ -1753,6 +1760,106 @@ def _bgr_frame_to_ffmpeg_rgb24_bytes(frame: np.ndarray, expect_h: int, expect_w:
     except Exception:
         return None
 
+def _fixed_rate_push_worker(device_id: str):
+    """固定速率推帧线程：独立于主循环，以精确帧率间隔向 FFmpeg 推帧。
+    
+    核心思路：
+    - 主循环负责读取帧、缓冲、AI处理，将待推帧写入 device_output_frames
+    - 本线程以 steady clock 间隔读取 latest output frame 并写入 FFmpeg stdin
+    - 当 AI 处理慢、主循环未产出新帧时，重复推上一帧（保持流畅，避免卡顿快进）
+    - 当主循环产出帧过快时，只保留最新帧（丢旧帧追实时）
+    """
+    logger.info(f"📤 固定速率推帧线程启动 [设备: {device_id}]")
+    push_running = device_push_running.get(device_id)
+    
+    # 获取推流参数
+    _profile_name, _effective_fps, _effective_w, _effective_h, _effective_bitrate, _effective_gop = _get_effective_realtime_stream_params()
+    frame_interval = 1.0 / max(1, _effective_fps)
+    
+    last_push_frame = None
+    last_push_w = None
+    last_push_h = None
+    last_push_time = time.perf_counter()
+    push_frame_count = 0
+    
+    while push_running and not push_running.is_set() and not stop_event.is_set():
+        try:
+            # 精确帧率控制：计算下一帧应该推送的时间
+            target_time = last_push_time + frame_interval
+            now = time.perf_counter()
+            sleep_duration = target_time - now
+            
+            if sleep_duration > 0:
+                time.sleep(sleep_duration)
+            elif sleep_duration < -frame_interval * 2:
+                # 严重落后（超过2帧间隔），重置时间基准避免突发推帧
+                last_push_time = time.perf_counter()
+                target_time = last_push_time + frame_interval
+                time.sleep(frame_interval)
+            
+            last_push_time = time.perf_counter()
+            
+            # 获取当前推送进程
+            pusher_process = device_pushers.get(device_id)
+            if not pusher_process or pusher_process.poll() is not None:
+                # 推送进程不可用，短暂等待
+                time.sleep(0.01)
+                continue
+            
+            # 读取最新待推帧
+            output_lock = device_output_locks.get(device_id)
+            output_frame_info = None
+            if output_lock:
+                with output_lock:
+                    output_frame_info = device_output_frames.get(device_id)
+            
+            # 确定要推送的帧
+            frame_to_push = None
+            push_w = None
+            push_h = None
+            
+            if output_frame_info is not None and output_frame_info.get('frame') is not None:
+                frame_to_push = output_frame_info['frame']
+                push_w = output_frame_info['w']
+                push_h = output_frame_info['h']
+                # 更新上一帧缓存
+                last_push_frame = frame_to_push
+                last_push_w = push_w
+                last_push_h = push_h
+            elif last_push_frame is not None:
+                # 没有新帧，重复上一帧（保持流畅）
+                frame_to_push = last_push_frame
+                push_w = last_push_w
+                push_h = last_push_h
+            else:
+                # 首帧尚未就绪，等待
+                time.sleep(0.005)
+                continue
+            
+            # 确保帧尺寸与 FFmpeg -s 参数一致
+            raw_bytes = _bgr_frame_to_ffmpeg_rgb24_bytes(frame_to_push, push_h, push_w)
+            if raw_bytes is None:
+                continue
+            
+            # 写入 FFmpeg stdin
+            try:
+                pusher_process.stdin.write(raw_bytes)
+                pusher_process.stdin.flush()
+                push_frame_count += 1
+                if push_frame_count % 150 == 0:
+                    _mark_quality_success()
+            except Exception as e:
+                logger.error(f"❌ 设备 {device_id} 固定速率推帧写入失败: {str(e)}")
+                _mark_quality_failure("推送帧失败")
+                if pusher_process.poll() is not None:
+                    device_pushers.pop(device_id, None)
+                    
+        except Exception as e:
+            logger.error(f"❌ 设备 {device_id} 固定速率推帧线程异常: {str(e)}", exc_info=True)
+            time.sleep(0.01)
+    
+    logger.info(f"📤 固定速率推帧线程停止 [设备: {device_id}]")
+
 
 def buffer_streamer_worker(device_id: str):
     """缓流器工作线程：为指定摄像头缓冲源流，接收推帧器插入的帧，输出到目标流"""
@@ -1770,6 +1877,8 @@ def buffer_streamer_worker(device_id: str):
     rtsp_url = device_stream_info.get('rtsp_url')
     rtmp_url = device_stream_info.get('rtmp_url')
     device_name = device_stream_info.get('device_name', device_id)
+    _is_gb28181 = device_stream_info.get('is_gb28181', False)
+    _original_source = device_stream_info.get('original_source')
 
     # 打印推流地址信息
     logger.info(f"📺 设备 {device_id} 流地址配置:")
@@ -1802,6 +1911,7 @@ def buffer_streamer_worker(device_id: str):
     pusher_retry_count = 0  # FFmpeg 推送进程重试计数
     pusher_max_retries = 3  # FFmpeg 推送进程最大重试次数
     last_pusher_failure_time = 0  # 上次推送进程失败的时间
+    _last_gb28181_resolve_time = 0.0  # GB28181 上次重新解析时间（用于频率限制）
 
     # 初始化stderr缓冲区
     if device_id not in device_pusher_stderr_buffers:
@@ -1813,10 +1923,11 @@ def buffer_streamer_worker(device_id: str):
         device_codec_status[device_id] = _hwaccel_codec
         device_codec_locks[device_id] = threading.Lock()
 
-    # 流畅度优化：基于时间戳的帧率控制
+    # 流畅度优化已移至独立固定速率推帧线程（_fixed_rate_push_worker）
+    # 主循环仍需帧消费速率控制，防止 GB28181 录像回放等非实时源全速发帧导致快进
     _profile_name, _effective_fps, _effective_w, _effective_h, _effective_bitrate, _effective_gop = _get_effective_realtime_stream_params()
-    frame_interval = 1.0 / _effective_fps
-    last_frame_time = time.time()
+    _frame_interval = 1.0 / max(1, _effective_fps)
+    _last_frame_consume_time = time.perf_counter()
     last_processed_frame = None
     last_processed_detections = []
     last_processed_detection_timestamp = 0.0
@@ -1847,6 +1958,26 @@ def buffer_streamer_worker(device_id: str):
         try:
             # 打开源流（支持 RTSP 和 RTMP）
             if cap is None or not cap.isOpened():
+                # GB28181 源重连时重新解析 URL（录像回放会话结束后旧 URL 会失效）
+                # 频率限制：至少间隔30秒，避免重连时反复请求 GB28181 播放 API
+                if _is_gb28181 and _original_source:
+                    _resolve_elapsed = time.time() - _last_gb28181_resolve_time
+                    if _resolve_elapsed >= 30.0:
+                        _last_gb28181_resolve_time = time.time()
+                        _new_url = resolve_gb28181_source(_original_source, logger=logger)
+                        if _new_url and _new_url != rtsp_url:
+                            logger.info(f"📌 设备 {device_id} GB28181源重新解析: {rtsp_url} -> {_new_url}")
+                            rtsp_url = _new_url
+                            retry_count = 0  # URL 已更新，重置重试计数
+                        elif _new_url:
+                            logger.info(f"📌 设备 {device_id} GB28181源重新解析（URL未变）: {rtsp_url}")
+                        else:
+                            logger.warning(f"⚠️ 设备 {device_id} GB28181源重新解析失败，使用上次URL重试")
+
+                # 源流断开期间：检查推流进程是否存活，记录状态
+                if pusher_process is not None and pusher_process.poll() is not None:
+                    logger.debug(f"设备 {device_id} 源流断开期间推流进程已退出，将在源流重连后自动重启")
+
                 stream_type = "RTSP" if rtsp_url.startswith('rtsp://') else "RTMP" if rtsp_url.startswith(
                     'rtmp://') else "流"
 
@@ -1936,11 +2067,33 @@ def buffer_streamer_worker(device_id: str):
                     continue
 
                 retry_count = 0
+
+                # GB28181 源：读取源流实际帧率用于帧消费速率控制，防止快进
+                if _is_gb28181:
+                    try:
+                        _src_fps_raw = cap.get(cv2.CAP_PROP_FPS)
+                        if _src_fps_raw and _src_fps_raw > 1:
+                            _frame_interval_old = _frame_interval
+                            _frame_interval = 1.0 / int(round(_src_fps_raw))
+                            logger.info(
+                                f"📌 设备 {device_id} GB28181源实际帧率: {_src_fps_raw:.1f}fps → "
+                                f"消费间隔 {_frame_interval:.4f}s（替代输出帧率 {_effective_fps}fps 的 {_frame_interval_old:.4f}s）"
+                            )
+                    except Exception as _e:
+                        logger.debug(f"设备 {device_id} 读取源流帧率失败: {_e}")
+
                 if (
                     async_rtsp_read_enabled()
                     and (rtsp_url.startswith("rtsp://") or rtsp_url.startswith("rtmp://"))
                 ):
-                    cap = AsyncVideoStream(cap).start()
+                    # GB28181 录像回放等非实时源使用 FIFO 队列模式，按序消费帧防止快进
+                    _queue_max_override = None
+                    if _is_gb28181 or device_stream_info.get('source_type') == 'gb28181':
+                        _gb_fifo = int(os.getenv("AI_GB28181_ASYNC_QUEUE_MAX", "10"))
+                        if _gb_fifo > 1:
+                            _queue_max_override = _gb_fifo
+                            logger.info(f"📌 设备 {device_id} GB28181源，使用 FIFO 缓冲 {_gb_fifo} 帧按序消费（AI_GB28181_ASYNC_QUEUE_MAX）")
+                    cap = AsyncVideoStream(cap, queue_max=_queue_max_override).start()
                     _fifo = getattr(cap, "queue_max", 1)
                     logger.info(
                         f"📌 设备 {device_id} 已启用异步拉流（后台解码；AI_RTSP_ASYNC_READ=0 关闭）"
@@ -1956,6 +2109,13 @@ def buffer_streamer_worker(device_id: str):
                     last_rtsp_connect_time = time.time()
 
             # 从源流读取帧（异步模式下由后台线程 decode，此处取缓冲区最新帧）
+            # 帧消费速率控制：按 effective_fps 消费帧，防止非实时源（GB28181录像回放）全速发帧导致快进
+            _now = time.perf_counter()
+            _elapsed = _now - _last_frame_consume_time
+            if _elapsed < _frame_interval:
+                time.sleep(_frame_interval - _elapsed)
+            _last_frame_consume_time = time.perf_counter()
+
             ret, frame = cap.read()
 
             if not ret or frame is None:
@@ -1969,7 +2129,9 @@ def buffer_streamer_worker(device_id: str):
                         gray_bad_streak = 0
                         time.sleep(rtsp_read_fail_delay_sec)
                         continue
-                    time.sleep(0.002)
+                    # FIFO 队列暂时为空（后台线程仍在解码），等待帧间隔的一半再重试
+                    # 对于 GB28181 源帧率可能较低，避免高频空转
+                    time.sleep(min(_frame_interval * 0.5, 0.02))
                     continue
                 logger.warning(f"设备 {device_id} 读取源流帧失败，重新连接...")
                 if cap is not None:
@@ -2011,7 +2173,6 @@ def buffer_streamer_worker(device_id: str):
             frame_counts[device_id] += 1
             frame_count = frame_counts[device_id]
             profile_name, effective_fps, effective_w, effective_h, effective_bitrate, effective_gop = _get_effective_realtime_stream_params()
-            frame_interval = 1.0 / max(1, effective_fps)
 
             # 与 stream_forward_service 一致：raw 帧保持摄像头/源流分辨率，由 FFmpeg lanczos 缩放到画质档位
             stdin_h, stdin_w = frame.shape[:2]
@@ -2097,6 +2258,16 @@ def buffer_streamer_worker(device_id: str):
                     
                     # 如果切换到软件编码，确保进程被重置以便立即重试
                     if should_retry_with_software:
+                        # 停止固定速率推帧线程
+                        _push_running = device_push_running.get(device_id)
+                        if _push_running:
+                            _push_running.set()
+                        _push_thread = device_push_threads.pop(device_id, None)
+                        if _push_thread and _push_thread.is_alive():
+                            try:
+                                _push_thread.join(timeout=2)
+                            except:
+                                pass
                         # 关闭旧进程（如果还在运行）
                         if pusher_process and pusher_process.poll() is None:
                             try:
@@ -2132,6 +2303,17 @@ def buffer_streamer_worker(device_id: str):
                             logger.warning("")
 
                 # 关闭旧进程
+                # 停止固定速率推帧线程
+                _push_running = device_push_running.get(device_id)
+                if _push_running:
+                    _push_running.set()
+                _push_thread = device_push_threads.pop(device_id, None)
+                if _push_thread and _push_thread.is_alive():
+                    try:
+                        _push_thread.join(timeout=2)
+                    except:
+                        pass
+
                 if pusher_process and pusher_process.poll() is None:
                     try:
                         pusher_process.stdin.close()
@@ -2393,6 +2575,23 @@ def buffer_streamer_worker(device_id: str):
 
                             # 额外等待一小段时间，确保 RTMP 连接已建立
                             time.sleep(0.3)
+
+                            # 启动固定速率推帧线程
+                            if device_id not in device_output_locks:
+                                device_output_locks[device_id] = threading.Lock()
+                            if device_id not in device_output_frames:
+                                device_output_frames[device_id] = None
+                            if device_id not in device_push_running:
+                                device_push_running[device_id] = threading.Event()
+                            device_push_running[device_id].clear()
+                            push_thread = threading.Thread(
+                                target=_fixed_rate_push_worker,
+                                args=(device_id,),
+                                daemon=True
+                            )
+                            device_push_threads[device_id] = push_thread
+                            push_thread.start()
+                            logger.info(f"📤 设备 {device_id} 固定速率推帧线程已启动")
                     except Exception as e:
                         logger.error(f"❌ 设备 {device_id} 启动推送进程异常: {str(e)}", exc_info=True)
                         pusher_process = None
@@ -2402,6 +2601,17 @@ def buffer_streamer_worker(device_id: str):
                     f"🔄 设备 {device_id} 源流分辨率变化 ({frame_width}x{frame_height} -> {stdin_w}x{stdin_h})，"
                     f"重启推送进程并清空缓冲（避免 rawvideo 与 -s 不一致导致推流灰屏）"
                 )
+                # 停止固定速率推帧线程
+                _push_running = device_push_running.get(device_id)
+                if _push_running:
+                    _push_running.set()
+                _push_thread = device_push_threads.pop(device_id, None)
+                if _push_thread and _push_thread.is_alive():
+                    try:
+                        _push_thread.join(timeout=2)
+                    except:
+                        pass
+
                 if pusher_process and pusher_process.poll() is None:
                     try:
                         pusher_process.stdin.close()
@@ -2426,6 +2636,11 @@ def buffer_streamer_worker(device_id: str):
                 frame_height = stdin_h
                 with buffer_locks[device_id]:
                     frame_buffers[device_id].clear()
+                # 清空输出帧缓冲区
+                output_lock = device_output_locks.get(device_id)
+                if output_lock:
+                    with output_lock:
+                        device_output_frames[device_id] = None
                 pending_frames.clear()
                 next_output_frame = frame_count
                 last_processed_frame = None
@@ -2655,31 +2870,19 @@ def buffer_streamer_worker(device_id: str):
                             logger.debug(
                                 f"设备 {device_id} 检测到 {len(detections)} 个目标，但告警事件未启用（alert_event_enabled={task_config.alert_event_enabled if task_config else None}）")
 
-                # 推送到RTMP流（raw rgb 尺寸必须与 FFmpeg -s 一致）
+                # 将输出帧写入固定速率推帧缓冲区（由独立推送线程按帧率推送到 FFmpeg）
                 if (
-                    pusher_process
-                    and pusher_process.poll() is None
-                    and rtmp_url
-                    and frame_width is not None
+                    frame_width is not None
                     and frame_height is not None
                 ):
-                    try:
-                        raw_bytes = _bgr_frame_to_ffmpeg_rgb24_bytes(
-                            output_frame, frame_height, frame_width
-                        )
-                        if raw_bytes is None:
-                            logger.warning(f"⚠️ 设备 {device_id} 帧 {next_output_frame} 无法编码为推流原始帧，跳过")
-                        else:
-                            pusher_process.stdin.write(raw_bytes)
-                            pusher_process.stdin.flush()
-                            if next_output_frame % 150 == 0:
-                                _mark_quality_success()
-                    except Exception as e:
-                        logger.error(f"❌ 设备 {device_id} 推送帧失败: {str(e)}")
-                        _mark_quality_failure("推送帧失败")
-                        if pusher_process.poll() is not None:
-                            pusher_process = None
-                            device_pushers.pop(device_id, None)
+                    output_lock = device_output_locks.get(device_id)
+                    if output_lock:
+                        with output_lock:
+                            device_output_frames[device_id] = {
+                                'frame': output_frame,
+                                'w': frame_width,
+                                'h': frame_height
+                            }
 
                 # 清理已输出的帧
                 with buffer_locks[device_id]:
@@ -2696,34 +2899,27 @@ def buffer_streamer_worker(device_id: str):
 
                 output_count += 1
 
-            # 如果还有未输出的帧，使用插值帧
+            # 如果没有新帧输出，将插值帧写入推帧缓冲区
             if (
                 output_count == 0
                 and last_processed_frame is not None
-                and pusher_process
-                and pusher_process.poll() is None
-                and rtmp_url
                 and frame_width is not None
                 and frame_height is not None
             ):
-                try:
-                    raw_bytes = _bgr_frame_to_ffmpeg_rgb24_bytes(
-                        last_processed_frame, frame_height, frame_width
-                    )
-                    if raw_bytes:
-                        pusher_process.stdin.write(raw_bytes)
-                        pusher_process.stdin.flush()
-                except Exception as e:
-                    logger.error(f"❌ 设备 {device_id} 推送插值帧失败: {str(e)}")
+                output_lock = device_output_locks.get(device_id)
+                if output_lock:
+                    with output_lock:
+                        # 只有当推送线程还没有拿到更新的帧时才用插值帧覆盖
+                        current_output = device_output_frames.get(device_id)
+                        if current_output is None or current_output.get('frame') is None:
+                            device_output_frames[device_id] = {
+                                'frame': last_processed_frame,
+                                'w': frame_width,
+                                'h': frame_height
+                            }
 
-            # 流畅度优化：基于时间戳的帧率控制
-            current_time = time.time()
-            elapsed = current_time - last_frame_time
-            if elapsed < frame_interval:
-                time.sleep(frame_interval - elapsed)
-            last_frame_time = time.time()
-
-            # 优化CPU占用：在处理完所有队列后，如果没有更多工作，短暂休眠
+            # 帧率控制：消费速率控制已在帧读取前完成，推帧速率由独立线程保证
+            # 仅在队列为空且没有待处理帧时短暂休眠以减少CPU占用
             # 检查是否有待处理的帧或队列中有数据
             has_pending_work = False
             with buffer_locks[device_id]:
@@ -2740,6 +2936,17 @@ def buffer_streamer_worker(device_id: str):
         except Exception as e:
             logger.error(f"❌ 设备 {device_id} 缓流器异常: {str(e)}", exc_info=True)
             time.sleep(2)
+
+    # 停止固定速率推帧线程
+    push_running = device_push_running.get(device_id)
+    if push_running:
+        push_running.set()
+    push_thread = device_push_threads.pop(device_id, None)
+    if push_thread and push_thread.is_alive():
+        try:
+            push_thread.join(timeout=3)
+        except:
+            pass
 
     # 清理资源
     if cap is not None:
@@ -3105,6 +3312,20 @@ def yolo_detection_worker(worker_id: int):
 def cleanup_all_resources():
     """清理所有资源（FFmpeg进程、VideoCapture等）"""
     logger.info("🧹 开始清理所有资源...")
+
+    # 停止所有固定速率推帧线程
+    for device_id, push_running in list(device_push_running.items()):
+        if push_running:
+            push_running.set()
+    for device_id, push_thread in list(device_push_threads.items()):
+        if push_thread and push_thread.is_alive():
+            try:
+                push_thread.join(timeout=2)
+            except:
+                pass
+    device_push_threads.clear()
+    device_push_running.clear()
+    device_output_frames.clear()
 
     # 清理所有FFmpeg推送进程
     for device_id, pusher_process in list(device_pushers.items()):
