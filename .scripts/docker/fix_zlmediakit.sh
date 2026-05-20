@@ -145,7 +145,7 @@ snapRoot=./www/snap/
 [general]
 enableVhost=0
 listen_ip=::
-mediaServerId=zlmediakit
+mediaServerId=zlmediakit-local
 
 [http]
 allow_cross_domains=1
