@@ -15,15 +15,6 @@
             <a-divider orientation="left">布防时段配置</a-divider>
             <DefenseSchedulePicker v-model:modelValue="defenseSchedule" :disabled="isViewMode" />
           </div>
-          <!-- 告警通知配置 -->
-          <div class="alert-notification-wrapper" v-if="showAlertNotificationConfig">
-            <!-- 告警抑制时间 -->
-            <a-form-item label="告警抑制时间（秒）" help="防止频繁通知，默认300秒（5分钟）">
-              <a-input-number :value="alertNotificationConfig.suppress_time" :min="0" :max="3600" :step="60"
-                placeholder="300" :disabled="isViewMode"
-                @change="(value) => { alertNotificationConfig.suppress_time = value || 300; }" style="width: 100%" />
-            </a-form-item>
-          </div>
         </div>
       </a-tab-pane>
       <a-tab-pane key="status" tab="服务状态" :disabled="!taskId">
@@ -553,18 +544,21 @@ const [registerForm, { setFieldsValue, validate, resetFields, updateSchema, getF
             disabled: isViewMode.value,
             onChange: async (checked: boolean) => {
               model.alert_event_enabled = checked;
-              // 立即更新 formValues，确保 AlertNotificationConfig 组件能够及时响应
-              const currentValues = await getFieldsValue();
-              formValues.value = { ...currentValues, alert_event_enabled: checked };
-              // 如果关闭告警事件，同时关闭告警通知
+              const patch: Record<string, any> = { alert_event_enabled: checked };
               if (!checked) {
+                patch.alert_notification_enabled = false;
                 alertNotificationEnabled.value = false;
                 alertNotificationConfig.value = {
                   enabled: false,
                   channels: [],
                   suppress_time: 300,
                 };
+                notificationChannels.value = [];
+                channelTemplates.value = {};
               }
+              await setFieldsValue(patch);
+              const currentValues = await getFieldsValue();
+              formValues.value = { ...currentValues, ...patch };
             },
           }),
           h(Popover, {
@@ -594,6 +588,22 @@ const [registerForm, { setFieldsValue, validate, resetFields, updateSchema, getF
       },
       helpMessage: '是否启用告警事件，启用后会记录告警信息',
       ifShow: ({ values }) => values.task_type === 'realtime' || values.task_type === 'snap',
+    },
+    {
+      field: 'alert_event_suppress_time',
+      label: '告警间隔（秒）',
+      component: 'InputNumber',
+      defaultValue: 5,
+      componentProps: {
+        placeholder: '5',
+        min: 1,
+        max: 3600,
+        step: 1,
+        style: { width: '100%' },
+      },
+      helpMessage: '同一摄像头两次上报告警事件的最小间隔，用于减轻 Kafka 积压',
+      ifShow: ({ values }) =>
+        (values.task_type === 'realtime' || values.task_type === 'snap') && !!values.alert_event_enabled,
     },
     {
       field: 'alert_notification_enabled',
@@ -630,26 +640,22 @@ const [registerForm, { setFieldsValue, validate, resetFields, updateSchema, getF
       ifShow: ({ values }) => (values.task_type === 'realtime' || values.task_type === 'snap') && values.alert_event_enabled,
     },
     {
-      field: 'face_detection_enabled',
-      label: '启用人脸检测',
-      component: 'Switch',
+      field: 'alarm_suppress_time',
+      label: '通知间隔（秒）',
+      component: 'InputNumber',
+      defaultValue: 300,
       componentProps: {
-        checkedChildren: '是',
-        unCheckedChildren: '否',
+        placeholder: '300',
+        min: 0,
+        max: 86400,
+        step: 60,
+        style: { width: '100%' },
       },
-      helpMessage: '关闭后将过滤人脸相关检测结果',
-      ifShow: ({ values }) => values.task_type === 'realtime' || values.task_type === 'snap',
-    },
-    {
-      field: 'plate_detection_enabled',
-      label: '启用车牌检测',
-      component: 'Switch',
-      componentProps: {
-        checkedChildren: '是',
-        unCheckedChildren: '否',
-      },
-      helpMessage: '关闭后将过滤车牌相关检测结果',
-      ifShow: ({ values }) => values.task_type === 'realtime' || values.task_type === 'snap',
+      helpMessage: '同一任务两次发送短信/邮件等通知的最小间隔，默认 300 秒（5 分钟）',
+      ifShow: ({ values }) =>
+        (values.task_type === 'realtime' || values.task_type === 'snap') &&
+        !!values.alert_event_enabled &&
+        !!values.alert_notification_enabled,
     },
     {
       field: 'notification_channels',
@@ -775,13 +781,6 @@ const modalTitle = computed(() => {
 
 const isViewMode = computed(() => modalData.value.type === 'view');
 
-// 计算属性：是否显示告警通知配置
-const showAlertNotificationConfig = computed(() => {
-  return formValues.value?.alert_event_enabled &&
-    (formValues.value?.alert_notification_enabled || alertNotificationEnabled.value) &&
-    (formValues.value?.task_type === 'realtime' || formValues.value?.task_type === 'snap');
-});
-
 const [register, { setDrawerProps, closeDrawer }] = useDrawerInner(async (data) => {
   modalData.value = data || {};
   taskId.value = null;
@@ -902,8 +901,8 @@ const [register, { setDrawerProps, closeDrawer }] = useDrawerInner(async (data) 
       tracking_max_age: record.tracking_max_age || 25,
       tracking_smooth_alpha: record.tracking_smooth_alpha || 0.25,
       alert_event_enabled: record.alert_event_enabled !== undefined ? record.alert_event_enabled : false,
-      face_detection_enabled: record.face_detection_enabled !== undefined ? record.face_detection_enabled : true,
-      plate_detection_enabled: record.plate_detection_enabled !== undefined ? record.plate_detection_enabled : true,
+      alert_event_suppress_time: record.alert_event_suppress_time ?? 5,
+      alarm_suppress_time: record.alarm_suppress_time ?? 300,
       alert_notification_enabled: record.alert_notification_enabled !== undefined ? record.alert_notification_enabled : false,
       notification_channels: notificationChannels.value,
       is_full_day_defense: fullDayDefense,
@@ -930,8 +929,8 @@ const [register, { setDrawerProps, closeDrawer }] = useDrawerInner(async (data) 
         { field: 'tracking_max_age', componentProps: { disabled: true } },
         { field: 'tracking_smooth_alpha', componentProps: { disabled: true } },
         { field: 'alert_event_enabled', componentProps: { disabled: true } },
-        { field: 'face_detection_enabled', componentProps: { disabled: true } },
-        { field: 'plate_detection_enabled', componentProps: { disabled: true } },
+        { field: 'alert_event_suppress_time', componentProps: { disabled: true } },
+        { field: 'alarm_suppress_time', componentProps: { disabled: true } },
         { field: 'alert_notification_enabled', componentProps: { disabled: true } },
         { field: 'notification_channels', componentProps: { disabled: true } },
         { field: 'notification_templates', componentProps: { disabled: true } },
@@ -953,8 +952,8 @@ const [register, { setDrawerProps, closeDrawer }] = useDrawerInner(async (data) 
         { field: 'tracking_max_age', componentProps: { disabled: false } },
         { field: 'tracking_smooth_alpha', componentProps: { disabled: false } },
         { field: 'alert_event_enabled', componentProps: { disabled: false } },
-        { field: 'face_detection_enabled', componentProps: { disabled: false } },
-        { field: 'plate_detection_enabled', componentProps: { disabled: false } },
+        { field: 'alert_event_suppress_time', componentProps: { disabled: false } },
+        { field: 'alarm_suppress_time', componentProps: { disabled: false } },
         { field: 'alert_notification_enabled', componentProps: { disabled: false } },
         { field: 'notification_channels', componentProps: { disabled: false } },
         { field: 'notification_templates', componentProps: { disabled: false } },
@@ -978,8 +977,8 @@ const [register, { setDrawerProps, closeDrawer }] = useDrawerInner(async (data) 
       { field: 'tracking_max_age', componentProps: { disabled: false } },
       { field: 'tracking_smooth_alpha', componentProps: { disabled: false } },
       { field: 'alert_event_enabled', componentProps: { disabled: false } },
-      { field: 'face_detection_enabled', componentProps: { disabled: false } },
-      { field: 'plate_detection_enabled', componentProps: { disabled: false } },
+      { field: 'alert_event_suppress_time', componentProps: { disabled: false } },
+      { field: 'alarm_suppress_time', componentProps: { disabled: false } },
       { field: 'alert_notification_enabled', componentProps: { disabled: false } },
       { field: 'notification_channels', componentProps: { disabled: false } },
       { field: 'notification_templates', componentProps: { disabled: false } },
@@ -996,8 +995,8 @@ const [register, { setDrawerProps, closeDrawer }] = useDrawerInner(async (data) 
       tracking_max_age: 25,
       tracking_smooth_alpha: 0.25,
       alert_event_enabled: false, // 默认关闭告警事件
-      face_detection_enabled: true, // 默认开启人脸检测
-      plate_detection_enabled: true, // 默认开启车牌检测
+      alert_event_suppress_time: 5,
+      alarm_suppress_time: 300,
       notification_channels: [],
       is_full_day_defense: true, // 默认全天布防
     });
@@ -1143,6 +1142,11 @@ const handleSubmit = async () => {
       (method: string) => channelTemplates.value[method] !== undefined && channelTemplates.value[method] !== null
     );
 
+    if (values.alert_event_enabled) {
+      values.alert_event_suppress_time = values.alert_event_suppress_time ?? 5;
+      values.alarm_suppress_time = values.alarm_suppress_time ?? 300;
+    }
+
     if (values.alert_event_enabled && values.alert_notification_enabled && selectedChannels.length > 0) {
       values.alert_notification_enabled = true;
       // 构建通知渠道配置
@@ -1158,7 +1162,6 @@ const handleSubmit = async () => {
       values.alert_notification_config = {
         channels: channels,
       };
-      values.alarm_suppress_time = alertNotificationConfig.value.suppress_time || 300;
     } else {
       values.alert_notification_enabled = false;
       values.alert_notification_config = null;
@@ -1254,10 +1257,11 @@ const handleReset = () => {
       tracking_max_age: 25,
       tracking_smooth_alpha: 0.25,
       alert_event_enabled: false, // 默认关闭告警事件
-      face_detection_enabled: true, // 默认开启人脸检测
-      plate_detection_enabled: true, // 默认开启车牌检测
+      alert_event_suppress_time: 5,
+      alarm_suppress_time: 300,
       is_full_day_defense: true, // 默认全天布防
     });
+    alertNotificationConfig.value = { enabled: false, channels: [], suppress_time: 300 };
     // 重置布防时段为默认值（全天布防）
     defenseSchedule.value = {
       mode: 'full', // 默认全防模式
@@ -1298,8 +1302,9 @@ const handleReset = () => {
       tracking_max_age: record.tracking_max_age || 25,
       tracking_smooth_alpha: record.tracking_smooth_alpha || 0.25,
       alert_event_enabled: record.alert_event_enabled !== undefined ? record.alert_event_enabled : false,
-      face_detection_enabled: record.face_detection_enabled !== undefined ? record.face_detection_enabled : true,
-      plate_detection_enabled: record.plate_detection_enabled !== undefined ? record.plate_detection_enabled : true,
+      alert_event_suppress_time: record.alert_event_suppress_time ?? 5,
+      alarm_suppress_time: record.alarm_suppress_time ?? 300,
+      alert_notification_enabled: record.alert_notification_enabled !== undefined ? record.alert_notification_enabled : false,
       is_full_day_defense: fullDayDefense,
     });
 
@@ -1347,14 +1352,6 @@ const handleReset = () => {
 
   .defense-schedule-wrapper {
     margin-top: 8px;
-  }
-
-  .alert-notification-wrapper {
-    margin-top: 8px;
-
-    :deep(.ant-divider) {
-      margin: 16px 0;
-    }
   }
 
   .notification-templates-wrapper {

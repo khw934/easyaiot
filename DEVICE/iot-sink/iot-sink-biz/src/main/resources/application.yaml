@@ -161,8 +161,8 @@ spring:
             age:
               ms: 300000
       listener:
-        # 在侦听器容器中运行的线程数，一般设置为 机器数*分区数
-        concurrency: 4
+        # 告警消费并发（建议 <= 主题分区数 64；单实例 16 可并行处理 16 个分区）
+        concurrency: 16
         # 自动提交关闭，需要设置手动消息确认
         ack-mode: manual_immediate
         # 消费监听接口监听的主题不存在时，默认会报错，所以设置为false忽略错误

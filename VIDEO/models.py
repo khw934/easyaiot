@@ -607,6 +607,7 @@ class AlgorithmTask(db.Model):
     
     # 告警事件配置
     alert_event_enabled = db.Column(db.Boolean, default=False, nullable=False, comment='是否启用告警事件')
+    alert_event_suppress_time = db.Column(db.Integer, default=5, nullable=False, comment='告警事件抑制时间（秒），同一设备两次上报告警事件的最小间隔，减轻Kafka积压，默认5秒')
     face_detection_enabled = db.Column(db.Boolean, default=True, nullable=False, comment='是否启用人脸检测')
     plate_detection_enabled = db.Column(db.Boolean, default=True, nullable=False, comment='是否启用车牌检测')
     
@@ -698,6 +699,7 @@ class AlgorithmTask(db.Model):
             'tracking_max_age': self.tracking_max_age,
             'tracking_smooth_alpha': self.tracking_smooth_alpha,
             'alert_event_enabled': self.alert_event_enabled,
+            'alert_event_suppress_time': self.alert_event_suppress_time,
             'face_detection_enabled': self.face_detection_enabled,
             'plate_detection_enabled': self.plate_detection_enabled,
             'alert_notification_enabled': self.alert_notification_enabled,

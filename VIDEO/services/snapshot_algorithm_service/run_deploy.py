@@ -287,8 +287,20 @@ push_queues = {}  # {device_id: queue.Queue}
 device_caps = {}  # {device_id: cv2.VideoCapture | AsyncVideoStream}
 # 告警抑制：记录每个设备上次告警推送时间
 last_alert_time = {}  # {device_id: timestamp}
-alert_suppression_interval = 5.0  # 告警抑制间隔：5秒
 alert_time_lock = threading.Lock()  # 告警时间戳锁，确保线程安全
+
+
+def _alert_event_suppress_seconds() -> float:
+    """从任务配置读取告警事件抑制间隔（秒），减轻 hook/Kafka 压力。"""
+    if task_config is None:
+        return float(os.getenv('ALERT_EVENT_SUPPRESS_INTERVAL', '5'))
+    raw = getattr(task_config, 'alert_event_suppress_time', None)
+    if raw is None:
+        return 5.0
+    try:
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        return 5.0
 yolo_executor = None  # YOLO 线程池（与 realtime_algorithm_service 一致）
 
 # 配置参数（算法链路：解码/推理/画框输出）：优先 AI_*，其次 VIEW_*（与 stream_forward 对齐），再回退通用变量
@@ -1031,6 +1043,19 @@ def try_send_snapshot_detection_alert(
     """有真实检测目标时上报告警（带检测框的图），无检测不调用。"""
     if not detections or not task_config or not task_config.alert_event_enabled:
         return
+
+    current_time = time.time()
+    with alert_time_lock:
+        last_time = last_alert_time.get(device_id, 0)
+        time_since_last_alert = current_time - last_time
+        suppress_interval = _alert_event_suppress_seconds()
+        if suppress_interval > 0 and time_since_last_alert < suppress_interval:
+            logger.info(
+                f"⏸️  设备 {device_id} 抓拍告警抑制：距上次 {time_since_last_alert:.2f} 秒，"
+                f"需间隔 {suppress_interval} 秒，帧 {frame_number}，{len(detections)} 个目标"
+            )
+            return
+        last_alert_time[device_id] = current_time
 
     object_counts: Dict[str, int] = {}
     all_info = []

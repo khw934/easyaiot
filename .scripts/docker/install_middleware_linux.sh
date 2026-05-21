@@ -3939,6 +3939,81 @@ wait_for_kafka() {
     return 1
 }
 
+# 摄像头告警相关 Kafka 主题（分区数，与 docker-compose KAFKA_NUM_PARTITIONS 一致）
+KAFKA_ALERT_TOPIC_PARTITIONS="${KAFKA_ALERT_TOPIC_PARTITIONS:-64}"
+KAFKA_ALERT_TOPICS=(
+    "iot-alert-notification"
+    "iot-alert-notification-send"
+    "iot-snapshot-alert"
+    "iot-snapshot-alert-notification-send"
+)
+
+# 创建或扩容告警 Kafka 主题至指定分区数
+init_kafka_alert_topics() {
+    local topic partitions current_partitions alter_output create_output describe_output
+
+    if ! docker ps --filter "name=kafka-server" --format "{{.Names}}" | grep -q "kafka-server"; then
+        print_warning "Kafka 容器未运行，跳过告警主题初始化"
+        return 1
+    fi
+
+    wait_for_kafka || {
+        print_warning "Kafka 未就绪，跳过告警主题初始化"
+        return 1
+    }
+
+    partitions="${KAFKA_ALERT_TOPIC_PARTITIONS}"
+    print_info "初始化告警 Kafka 主题（目标分区数: ${partitions}）..."
+
+    for topic in "${KAFKA_ALERT_TOPICS[@]}"; do
+        describe_output=$(docker exec kafka-server /opt/kafka/bin/kafka-topics.sh \
+            --bootstrap-server localhost:9092 \
+            --describe --topic "$topic" 2>&1) || true
+
+        if echo "$describe_output" | grep -q "Topic: ${topic}"; then
+            current_partitions=$(echo "$describe_output" | grep -E "PartitionCount:|Partition:" | head -n 1 | grep -oE '[0-9]+' | head -n 1)
+            if [ -z "$current_partitions" ]; then
+                current_partitions=$(echo "$describe_output" | grep -c "Partition:" || echo "0")
+            fi
+            if [ -n "$current_partitions" ] && [ "$current_partitions" -ge "$partitions" ] 2>/dev/null; then
+                print_success "主题 ${topic} 已存在，分区数 ${current_partitions}（>= ${partitions}）"
+                continue
+            fi
+            print_info "扩容主题 ${topic}: ${current_partitions:-未知} -> ${partitions} 分区"
+            alter_output=$(docker exec kafka-server /opt/kafka/bin/kafka-topics.sh \
+                --bootstrap-server localhost:9092 \
+                --alter --topic "$topic" --partitions "$partitions" 2>&1) || true
+            if echo "$alter_output" | grep -qiE "error|exception|failed"; then
+                print_warning "主题 ${topic} 扩容失败: ${alter_output}"
+            else
+                print_success "主题 ${topic} 已扩容至 ${partitions} 分区"
+            fi
+        else
+            print_info "创建主题 ${topic}（${partitions} 分区）..."
+            create_output=$(docker exec kafka-server /opt/kafka/bin/kafka-topics.sh \
+                --bootstrap-server localhost:9092 \
+                --create --if-not-exists \
+                --topic "$topic" \
+                --partitions "$partitions" \
+                --replication-factor 1 2>&1) || true
+            if echo "$create_output" | grep -qiE "error|exception|failed"; then
+                if echo "$create_output" | grep -qi "already exists"; then
+                    print_success "主题 ${topic} 已存在"
+                else
+                    print_warning "主题 ${topic} 创建失败: ${create_output}"
+                fi
+            else
+                print_success "主题 ${topic} 已创建（${partitions} 分区）"
+            fi
+        fi
+    done
+
+    print_info "告警 Kafka 主题列表:"
+    docker exec kafka-server /opt/kafka/bin/kafka-topics.sh \
+        --bootstrap-server localhost:9092 --list 2>/dev/null | grep -E '^iot-(alert|snapshot)' || true
+    return 0
+}
+
 
 # 等待 TDengine 服务就绪
 wait_for_tdengine() {
@@ -5939,6 +6014,10 @@ install_middleware() {
     echo ""
     init_minio
 
+    # 初始化/扩容告警 Kafka 主题（64 分区，缓解摄像头告警积压）
+    echo ""
+    init_kafka_alert_topics || print_warning "告警 Kafka 主题初始化未完成，可稍后手动执行: init_kafka_alert_topics"
+
     
     sleep 5
     bash "${SCRIPT_DIR}/set_permanent_token.sh" >/dev/null 2>&1 || true
@@ -5984,6 +6063,8 @@ start_middleware() {
     $COMPOSE_CMD -f "$COMPOSE_FILE" up -d 2>&1 | tee -a "$LOG_FILE"
     
     print_success "所有中间件启动完成"
+    echo ""
+    init_kafka_alert_topics || print_warning "告警 Kafka 主题初始化未完成"
     echo ""
     print_section "检查 Milvus 向量数据库"
     wait_for_milvus || print_warning "Milvus 未就绪"
@@ -6066,6 +6147,9 @@ restart_middleware() {
     echo ""
     print_info "等待服务就绪..."
     sleep 15
+
+    echo ""
+    init_kafka_alert_topics || print_warning "告警 Kafka 主题初始化未完成"
     
     # 确保 PostgreSQL 密码正确（确保重启后密码正确）
     echo ""

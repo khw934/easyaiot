@@ -59,8 +59,8 @@
         </a-form-item>
       </div>
 
-      <!-- 告警抑制时间 -->
-      <a-form-item label="告警抑制时间（秒）" help="防止频繁通知，默认300秒（5分钟）">
+      <!-- 通知间隔 -->
+      <a-form-item label="通知间隔（秒）" help="防止频繁通知，默认300秒（5分钟）">
         <a-input-number
           v-model:value="suppressTime"
           :min="0"

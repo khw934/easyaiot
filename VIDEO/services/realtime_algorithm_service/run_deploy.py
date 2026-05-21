@@ -306,8 +306,20 @@ device_codec_status = {}  # {device_id: 'h264_nvenc' | 'libx264'}
 device_codec_locks = {}  # {device_id: threading.Lock} 保护编码器状态
 # 告警抑制：记录每个设备上次告警推送时间
 last_alert_time = {}  # {device_id: timestamp}
-alert_suppression_interval = 5.0  # 告警抑制间隔：5秒
 alert_time_lock = threading.Lock()  # 告警时间戳锁，确保线程安全
+
+
+def _alert_event_suppress_seconds() -> float:
+    """从任务配置读取告警事件抑制间隔（秒），减轻 hook/Kafka 压力。"""
+    if task_config is None:
+        return float(os.getenv('ALERT_EVENT_SUPPRESS_INTERVAL', '5'))
+    raw = getattr(task_config, 'alert_event_suppress_time', None)
+    if raw is None:
+        return 5.0
+    try:
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        return 5.0
 
 # 配置参数（算法链路：解码/推理/画框输出）：优先 AI_*，其次 VIEW_*（与 stream_forward 对齐），再回退通用变量
 SOURCE_FPS = int(os.getenv('AI_SOURCE_FPS', os.getenv('VIEW_SOURCE_FPS', os.getenv('SOURCE_FPS', '25'))))
@@ -1039,9 +1051,10 @@ def try_send_alert_for_detections(
     with alert_time_lock:
         last_time = last_alert_time.get(device_id, 0)
         time_since_last_alert = current_time - last_time
-        if time_since_last_alert < alert_suppression_interval:
+        suppress_interval = _alert_event_suppress_seconds()
+        if suppress_interval > 0 and time_since_last_alert < suppress_interval:
             logger.info(
-                f"⏸️  设备 {device_id} 告警抑制{log_suffix}：距离上次推送仅 {time_since_last_alert:.2f} 秒，跳过（需间隔 {alert_suppression_interval} 秒），帧 {frame_number}，{len(detections)} 个目标"
+                f"⏸️  设备 {device_id} 告警抑制{log_suffix}：距离上次推送仅 {time_since_last_alert:.2f} 秒，跳过（需间隔 {suppress_interval} 秒），帧 {frame_number}，{len(detections)} 个目标"
             )
             return
         last_alert_time[device_id] = current_time

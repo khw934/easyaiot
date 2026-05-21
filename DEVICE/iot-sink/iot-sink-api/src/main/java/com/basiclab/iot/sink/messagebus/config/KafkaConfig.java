@@ -62,6 +62,12 @@ public class KafkaConfig {
     @Value("${spring.kafka.iot.properties.max.poll.interval.ms:600000}")
     private String maxPollIntervalTime;
 
+    /**
+     * 告警消费并发线程数，建议不超过告警主题分区数（默认 64）
+     */
+    @Value("${spring.kafka.iot.listener.concurrency:16}")
+    private int listenerConcurrency;
+
     @Bean
     public Map<String, Object> producerConfigs() {
         Map<String, Object> props = new HashMap<>(16);
@@ -131,6 +137,7 @@ public class KafkaConfig {
     public ConcurrentKafkaListenerContainerFactory<String, String> iotKafkaListenerContainerFactory() {
         ConcurrentKafkaListenerContainerFactory<String, String> factory = new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(iotConsumerFactory());
+        factory.setConcurrency(listenerConcurrency);
         // 设置手动确认模式，支持Acknowledgment参数
         factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
         return factory;

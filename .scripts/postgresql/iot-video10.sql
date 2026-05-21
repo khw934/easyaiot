@@ -272,6 +272,7 @@ CREATE TABLE public.algorithm_task (
     tracking_max_age integer NOT NULL,
     tracking_smooth_alpha double precision NOT NULL,
     alert_event_enabled boolean NOT NULL,
+    alert_event_suppress_time integer NOT NULL DEFAULT 5,
     alert_notification_enabled boolean NOT NULL,
     alert_notification_config text,
     alarm_suppress_time integer NOT NULL,
@@ -391,6 +392,13 @@ COMMENT ON COLUMN public.algorithm_task.tracking_smooth_alpha IS '追踪平滑�
 --
 
 COMMENT ON COLUMN public.algorithm_task.alert_event_enabled IS '是否启用告警事件';
+
+
+--
+-- Name: COLUMN algorithm_task.alert_event_suppress_time; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.algorithm_task.alert_event_suppress_time IS '告警事件抑制时间（秒），同一设备两次上报告警事件的最小间隔，减轻Kafka积压，默认5秒';
 
 
 --

@@ -47,6 +47,7 @@ export interface AlgorithmTask {
   tracking_smooth_alpha?: number; // 追踪平滑系数
   // 告警配置
   alert_event_enabled?: boolean; // 是否启用告警事件
+  alert_event_suppress_time?: number; // 告警事件抑制时间（秒），减轻 Kafka 积压
   face_detection_enabled?: boolean; // 是否启用人脸检测
   plate_detection_enabled?: boolean; // 是否启用车牌检测
   alert_notification_enabled?: boolean; // 是否启用告警通知
@@ -120,6 +121,7 @@ export const createAlgorithmTask = (data: {
   tracking_smooth_alpha?: number;
   // 告警配置
   alert_event_enabled?: boolean;
+  alert_event_suppress_time?: number;
   face_detection_enabled?: boolean;
   plate_detection_enabled?: boolean;
   alert_notification_enabled?: boolean;

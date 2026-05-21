@@ -18,6 +18,40 @@ import json
 
 logger = logging.getLogger(__name__)
 
+ALERT_EVENT_SUPPRESS_MIN = 1
+ALERT_EVENT_SUPPRESS_MAX = 3600
+ALARM_SUPPRESS_MIN = 0
+ALARM_SUPPRESS_MAX = 86400
+
+
+def _normalize_alert_interval_fields(
+    alert_event_suppress_time: Optional[int] = None,
+    alarm_suppress_time: Optional[int] = None,
+) -> Dict[str, int]:
+    """校验并规范化告警事件/通知抑制时间（秒）。"""
+    result = {}
+    if alert_event_suppress_time is not None:
+        try:
+            event_sec = int(alert_event_suppress_time)
+        except (TypeError, ValueError):
+            raise ValueError('告警事件抑制时间必须是整数（秒）')
+        if event_sec < ALERT_EVENT_SUPPRESS_MIN or event_sec > ALERT_EVENT_SUPPRESS_MAX:
+            raise ValueError(
+                f'告警事件抑制时间须在 {ALERT_EVENT_SUPPRESS_MIN}-{ALERT_EVENT_SUPPRESS_MAX} 秒之间'
+            )
+        result['alert_event_suppress_time'] = event_sec
+    if alarm_suppress_time is not None:
+        try:
+            notify_sec = int(alarm_suppress_time)
+        except (TypeError, ValueError):
+            raise ValueError('告警通知抑制时间必须是整数（秒）')
+        if notify_sec < ALARM_SUPPRESS_MIN or notify_sec > ALARM_SUPPRESS_MAX:
+            raise ValueError(
+                f'告警通知抑制时间须在 {ALARM_SUPPRESS_MIN}-{ALARM_SUPPRESS_MAX} 秒之间'
+            )
+        result['alarm_suppress_time'] = notify_sec
+    return result
+
 
 def _extract_notify_users_from_templates(channels: List[Dict]) -> List[Dict]:
     """
@@ -316,10 +350,12 @@ def create_algorithm_task(task_name: str,
                          tracking_max_age: int = 25,
                          tracking_smooth_alpha: float = 0.25,
                          alert_event_enabled: bool = False,
+                         alert_event_suppress_time: int = 5,
                          face_detection_enabled: bool = True,
                          plate_detection_enabled: bool = True,
                          alert_notification_enabled: bool = False,
                          alert_notification_config: Optional[str] = None,
+                         alarm_suppress_time: int = 300,
                          cron_expression: Optional[str] = None,
                          frame_skip: int = 25,
                          is_enabled: bool = False,
@@ -451,6 +487,13 @@ def create_algorithm_task(task_name: str,
                 schedule = [[0] * 24 for _ in range(7)]
                 defense_schedule = json.dumps(schedule)
         
+        interval_fields = _normalize_alert_interval_fields(
+            alert_event_suppress_time=alert_event_suppress_time,
+            alarm_suppress_time=alarm_suppress_time,
+        )
+        alert_event_suppress_time = interval_fields.get('alert_event_suppress_time', 5)
+        alarm_suppress_time = interval_fields.get('alarm_suppress_time', 300)
+
         # 处理告警通知配置（如果是字典或字符串，需要转换为JSON字符串）
         # 在保存前，从消息模板中提取通知人信息并保存到配置中
         if alert_notification_config:
@@ -515,10 +558,12 @@ def create_algorithm_task(task_name: str,
             tracking_max_age=tracking_max_age if task_type == 'realtime' else 25,
             tracking_smooth_alpha=tracking_smooth_alpha if task_type == 'realtime' else 0.25,
             alert_event_enabled=alert_event_enabled,
+            alert_event_suppress_time=alert_event_suppress_time,
             face_detection_enabled=face_detection_enabled,
             plate_detection_enabled=plate_detection_enabled,
             alert_notification_enabled=alert_notification_enabled,
             alert_notification_config=alert_notification_config,
+            alarm_suppress_time=alarm_suppress_time,
             space_id=None,
             cron_expression=cron_expression,
             frame_skip=frame_skip,
@@ -669,8 +714,10 @@ def update_algorithm_task(task_id: int, **kwargs) -> AlgorithmTask:
             'model_ids', 'model_names',  # 模型配置
             'extract_interval',  # 实时算法任务配置（rtmp_input_url和rtmp_output_url不再使用，从摄像头列表获取）
             'tracking_enabled', 'tracking_similarity_threshold', 'tracking_max_age', 'tracking_smooth_alpha',  # 追踪配置
-            'alert_event_enabled', 'face_detection_enabled', 'plate_detection_enabled',
-            'alert_notification_enabled', 'alert_notification_config',  # 告警配置
+            'alert_event_enabled', 'alert_event_suppress_time',
+            'face_detection_enabled', 'plate_detection_enabled',
+            'alert_notification_enabled', 'alert_notification_config',
+            'alarm_suppress_time',  # 告警配置
             'cron_expression', 'frame_skip',  # 抓拍算法任务配置
             'is_enabled', 'status', 'exception_reason',
             'defense_mode', 'defense_schedule'
@@ -681,6 +728,12 @@ def update_algorithm_task(task_id: int, **kwargs) -> AlgorithmTask:
             defense_mode = kwargs['defense_mode']
             if defense_mode and defense_mode not in ['full', 'half', 'day', 'night']:
                 raise ValueError(f"无效的布防模式: {defense_mode}，必须是 'full', 'half', 'day' 或 'night'")
+
+        interval_kwargs = _normalize_alert_interval_fields(
+            alert_event_suppress_time=kwargs.get('alert_event_suppress_time'),
+            alarm_suppress_time=kwargs.get('alarm_suppress_time'),
+        )
+        kwargs.update(interval_kwargs)
         
         # 处理告警通知配置（如果是字典或字符串，需要转换为JSON字符串）
         # 在保存前，从消息模板中提取通知人信息并保存到配置中

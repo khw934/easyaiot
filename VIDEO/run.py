@@ -322,6 +322,7 @@ def create_app():
                         ('last_capture_time', 'TIMESTAMP'),
                         ('face_detection_enabled', 'BOOLEAN NOT NULL DEFAULT TRUE'),
                         ('plate_detection_enabled', 'BOOLEAN NOT NULL DEFAULT TRUE'),
+                        ('alert_event_suppress_time', 'INTEGER NOT NULL DEFAULT 5'),
                         ('service_server_ip', 'VARCHAR(45)'),
                         ('service_port', 'INTEGER'),
                         ('service_process_id', 'INTEGER'),

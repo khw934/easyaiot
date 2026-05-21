@@ -6,14 +6,15 @@
 """
 import json
 import logging
+import threading
 import time
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 from flask import current_app
 from kafka import KafkaProducer
 from kafka.errors import KafkaError
-from models import db
+from models import db, AlgorithmTask, Device
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,9 @@ _init_retry_interval = 60  # 初始化失败后，60秒内不再重试
 # 警告抑制：记录上次输出 Kafka 不可用警告的时间，避免日志刷屏
 _last_kafka_unavailable_warning_time = 0
 _kafka_unavailable_warning_interval = 300  # 每5分钟最多输出一次警告
+# 告警事件 Kafka 投递抑制（与算法进程内抑制互补，防止抓拍等路径仍刷 Kafka）
+_last_alert_event_kafka_time: Dict[Tuple[str, str], float] = {}
+_alert_event_kafka_lock = threading.Lock()
 
 
 def get_kafka_producer():
@@ -120,9 +124,10 @@ def get_kafka_producer():
             api_version=(2, 5),
             # 启用幂等性，确保消息不重复
             enable_idempotence=True,
-            # 批量发送配置（提高性能）
-            batch_size=16384,  # 16KB
-            linger_ms=10,  # 等待10ms以批量发送
+            # 批量发送配置（提高性能，配合 64 分区分散写入）
+            batch_size=65536,  # 64KB
+            linger_ms=5,  # 等待5ms以批量发送
+            buffer_memory=67108864,  # 64MB 发送缓冲
             # 客户端ID，便于在日志中识别
             client_id='video-alert-producer',
         )
@@ -496,6 +501,46 @@ def _get_notify_users_from_message_templates(channels: list) -> list:
 
 
 
+def _resolve_alert_event_suppress_seconds(device_id: str, task_type: str) -> int:
+    """查询设备关联算法任务的告警事件抑制时间（秒）。"""
+    if not device_id:
+        return 5
+    try:
+        tt = task_type or 'realtime'
+        if tt == 'snapshot':
+            tt = 'snap'
+        query = AlgorithmTask.query.filter(
+            AlgorithmTask.devices.any(Device.id == device_id),
+            AlgorithmTask.alert_event_enabled == True,
+            AlgorithmTask.is_enabled == True,
+        )
+        if tt:
+            query = query.filter(AlgorithmTask.task_type == tt)
+        task = query.order_by(AlgorithmTask.id.asc()).first()
+        if task and task.alert_event_suppress_time is not None:
+            return max(0, int(task.alert_event_suppress_time))
+    except Exception as e:
+        logger.warning(f"查询告警事件抑制时间失败: device_id={device_id}, error={e}")
+    return 5
+
+
+def _should_suppress_alert_event_kafka(device_id: str, task_type: str, suppress_seconds: int) -> bool:
+    """同一设备在抑制窗口内不再向 Kafka 投递告警事件。"""
+    if not device_id or suppress_seconds <= 0:
+        return False
+    tt = task_type or 'realtime'
+    if tt == 'snapshot':
+        tt = 'snap'
+    key = (str(device_id), tt)
+    now = time.time()
+    with _alert_event_kafka_lock:
+        last = _last_alert_event_kafka_time.get(key, 0)
+        if now - last < suppress_seconds:
+            return True
+        _last_alert_event_kafka_time[key] = now
+    return False
+
+
 def process_alert_hook(alert_data: Dict) -> Dict:
     """
     处理告警Hook请求：仅发送到Kafka（Java端统一处理消息，包括区域比对、布防时段判断、存储到数据库）
@@ -523,6 +568,15 @@ def process_alert_hook(alert_data: Dict) -> Dict:
         # 统一task_type格式（snapshot -> snap）
         if task_type == 'snapshot':
             task_type = 'snap'
+
+        if device_id:
+            suppress_seconds = _resolve_alert_event_suppress_seconds(device_id, task_type)
+            if _should_suppress_alert_event_kafka(device_id, task_type, suppress_seconds):
+                logger.debug(
+                    f"告警事件 Kafka 抑制: device_id={device_id}, task_type={task_type}, "
+                    f"interval={suppress_seconds}s"
+                )
+                return {'status': 'suppressed', 'reason': 'alert_event_suppress_interval'}
 
         notification_config = None
         if device_id:
