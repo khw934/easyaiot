@@ -563,6 +563,14 @@ build_auto_labeling_image() {
         exit 1
     fi
 
+    for f in style.css script.js all.min.css; do
+        if [ ! -f "$AUTO_LABELING_DIR/static/$f" ]; then
+            print_error "标注平台缺少前端静态文件: static/$f（请从仓库拉取或恢复 static 目录）"
+            exit 1
+        fi
+    done
+    mkdir -p "$AUTO_LABELING_DIR/static/annotations"
+
     print_info "构建标注平台 Docker 镜像..."
     BUILD_LOG="/tmp/docker_build_auto_labeling_$$.log"
     set +e

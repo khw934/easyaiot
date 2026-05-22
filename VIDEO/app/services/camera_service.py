@@ -15,6 +15,7 @@ import tzlocal
 from apscheduler.schedulers.background import BackgroundScheduler
 from flask import current_app
 from onvif import ONVIFCamera
+from sqlalchemy import or_
 from wsdiscovery import WSDiscovery, Scope
 
 from app.services.nvr_service import nvr_fields_for_device, resolve_nvr_link
@@ -167,6 +168,53 @@ def _get_camera(id: str) -> Device:
 def _get_cameras() -> list[Device]:
     """获取所有设备"""
     return Device.query.all()
+
+
+def find_existing_device_for_register(
+    *,
+    ip: str = '',
+    mac: str = '',
+    serial_number: str = '',
+    nvr_id: int | None = None,
+    nvr_channel: int | None = None,
+) -> Device | None:
+    """网段登记或 NVR 通道挂载时查找已注册设备，避免重复创建。"""
+    ip = (ip or '').strip()
+    mac = (mac or '').strip()
+    serial = (serial_number or '').strip()
+
+    if nvr_id and nvr_channel and int(nvr_channel) > 0:
+        existing = Device.query.filter_by(nvr_id=nvr_id, nvr_channel=int(nvr_channel)).first()
+        if existing:
+            return existing
+
+    if nvr_id and ip:
+        existing = Device.query.filter(Device.nvr_id == nvr_id, Device.ip == ip).first()
+        if existing:
+            return existing
+
+    if mac:
+        existing = Device.query.filter(Device.mac == mac).first()
+        if existing:
+            return existing
+
+    if serial:
+        existing = Device.query.filter(Device.serial_number == serial).first()
+        if existing:
+            return existing
+
+    if ip:
+        existing = Device.query.filter(
+            Device.ip == ip,
+            or_(Device.nvr_id.is_(None), Device.nvr_channel == 0),
+        ).first()
+        if existing:
+            return existing
+        existing = Device.query.filter_by(ip=ip).first()
+        if existing:
+            return existing
+
+    return None
 
 
 def _is_custom_camera(camera: Device) -> bool:
@@ -524,6 +572,10 @@ def _init_all_cameras():
 
 def _safe_create_camera(camera: Device):
     """安全创建相机连接（带异常处理）"""
+    # NVR 挂载通道经 NVR 取流，不对 IPC 做 ONVIF 初始化
+    if camera.nvr_id:
+        logger.debug(f'设备 {camera.id} 为 NVR 挂载通道，跳过 ONVIF 连接初始化')
+        return
     # 如果摄像头地址是 rtmp，跳过ONVIF连接初始化
     if camera.source and camera.source.strip().lower().startswith('rtmp://'):
         logger.debug(f'设备 {camera.id} 的源地址是 RTMP，跳过ONVIF连接初始化')
@@ -667,13 +719,34 @@ def _generate_stream_urls(source: str, device_id: str) -> tuple[str, str, str, s
         return _default_stream_urls(device_id)
 
 
-def register_camera_by_onvif(ip: str, port: int, password: str) -> str:
+def _onvif_username_candidates(username: str | None) -> list[str]:
+    """生成 ONVIF 登录用户名候选列表。已提供用户名时仅尝试该用户名，避免多用户名试探导致设备锁定。"""
+    if username is not None and str(username).strip() != '':
+        return [str(username).strip()]
+    return ['admin', 'Administrator', 'root', '']
+
+
+def _format_onvif_register_error(ip: str, port: int, last_error: str | None) -> str:
+    """将 ONVIF 连接失败整理为可读的注册错误信息。"""
+    detail = (last_error or '').strip()
+    if 'locked' in detail.lower() or '锁定' in detail:
+        return (
+            f'设备 {ip}:{port} 因多次错误登录已被锁定，请等待约 30 分钟后重试，'
+            f'或到摄像机 Web 管理页解锁后再注册'
+        )
+    if detail:
+        return f'无法连接到设备 {ip}:{port}：{detail}'
+    return f'无法连接到设备 {ip}:{port}，请检查 IP、端口、用户名和密码是否正确'
+
+
+def register_camera_by_onvif(ip: str, port: int, password: str, username: str | None = None) -> str:
     """通过ONVIF搜索并自动注册摄像头
     
     Args:
         ip: 摄像头IP地址
         port: 摄像头端口
         password: 摄像头密码
+        username: 摄像头用户名（可选；未提供时依次尝试常见默认用户名）
         
     Returns:
         设备ID
@@ -689,41 +762,58 @@ def register_camera_by_onvif(ip: str, port: int, password: str) -> str:
     if not password or not password.strip():
         raise ValueError('摄像头密码不能为空')
     
-    # 尝试常见的用户名列表
-    common_usernames = ['admin', 'Administrator', 'root', '']
-    
     onvif_cam = None
     used_username = None
+    last_error: str | None = None
     temp_id = 'temp_' + str(time.time_ns())  # 临时ID用于连接测试
     
-    # 尝试使用不同的用户名连接
-    for username in common_usernames:
+    for candidate in _onvif_username_candidates(username):
         try:
             onvif_cam = _create_onvif_camera(
                 temp_id,
                 ip,
                 port,
-                username,
+                candidate,
                 password
             )
-            used_username = username
-            logger.info(f'使用用户名 "{username}" 成功连接到设备 {ip}:{port}')
+            used_username = candidate
+            logger.info(f'使用用户名 "{candidate}" 成功连接到设备 {ip}:{port}')
             break
         except Exception as e:
-            logger.debug(f'使用用户名 "{username}" 连接设备 {ip}:{port} 失败: {str(e)}')
+            last_error = str(e)
+            logger.debug(f'使用用户名 "{candidate}" 连接设备 {ip}:{port} 失败: {last_error}')
             continue
     
     if onvif_cam is None:
-        raise RuntimeError(f'无法连接到设备 {ip}:{port}，请检查IP、端口和密码是否正确，或尝试其他用户名')
+        raise RuntimeError(_format_onvif_register_error(ip, port, last_error))
     
     # 检查设备是否已存在（通过MAC地址）
     camera_info = onvif_cam.get_info()
     mac = camera_info.get('mac')
     
-    if mac:
-        existing_camera = Device.query.filter_by(mac=mac).first()
-        if existing_camera:
-            raise ValueError(f'设备已存在，设备ID: {existing_camera.id}')
+    existing_camera = find_existing_device_for_register(
+        ip=ip,
+        mac=mac or '',
+        serial_number=(camera_info.get('serial_number') or '').strip(),
+    )
+    if existing_camera:
+        update_camera(
+            existing_camera.id,
+            {
+                'ip': ip,
+                'port': port,
+                'username': used_username,
+                'password': password,
+                'source': camera_info.get('source'),
+                'mac': mac,
+                'manufacturer': camera_info.get('manufacturer'),
+                'model': camera_info.get('model'),
+                'firmware_version': camera_info.get('firmware_version'),
+                'serial_number': camera_info.get('serial_number'),
+            },
+        )
+        logger.info(f'设备 {existing_camera.id} 已存在，已更新（ONVIF 登记）')
+        return existing_camera.id
     
     # 生成设备ID
     device_id = str(time.time_ns())
@@ -868,9 +958,12 @@ def register_camera(register_info: dict) -> str:
                 if not password and extracted_password:
                     password = extracted_password
         
-        # 如果不是自定义设备且不是RTMP流，且提供了IP、端口、用户名、密码，且某些字段缺失，尝试通过ONVIF获取设备信息
+        # NVR 挂载通道或显式 skip_onvif：仅用枚举/表单字段，不逐台 ONVIF
         camera_info = {}
-        if not is_custom and not is_rtmp and ip and port and username and password:
+        is_nvr_channel = bool(register_info.get('nvr_id')) or register_info.get('skip_onvif')
+        if is_nvr_channel:
+            logger.info(f'设备 {id} 为 NVR 挂载通道，跳过 ONVIF 信息获取')
+        elif not is_custom and not is_rtmp and ip and port and username and password:
             # 检查是否有缺失的字段需要填充
             missing_fields = [
                 'mac', 'manufacturer', 'model', 'firmware_version', 
@@ -915,42 +1008,85 @@ def register_camera(register_info: dict) -> str:
             rtmp_stream, http_stream, ai_rtmp_stream, ai_http_stream = _generate_stream_urls(source, id)
         
         nvr_id, nvr_channel = resolve_nvr_link(register_info)
-        # 创建设备记录，优先使用用户提供的字段，缺失的字段从ONVIF获取的信息中填充
-        camera = Device(
-            id=id,
-            name=name,
-            source=source,
-            rtmp_stream=rtmp_stream,
-            http_stream=http_stream,
-            ai_rtmp_stream=ai_rtmp_stream,
-            ai_http_stream=ai_http_stream,
-            stream=register_info.get('stream', 0),
+        reg_mac = (register_info.get('mac') or camera_info.get('mac') or '').strip()
+        reg_serial = (register_info.get('serial_number') or camera_info.get('serial_number') or '').strip()
+        existing = find_existing_device_for_register(
             ip=ip or '',
-            port=port,
-            username=username,
-            password=password,
-            mac=register_info.get('mac') or camera_info.get('mac', ''),
-            manufacturer=manufacturer.strip(),
-            model=model.strip(),
-            firmware_version=register_info.get('firmware_version') or camera_info.get('firmware_version', ''),
-            serial_number=register_info.get('serial_number') or camera_info.get('serial_number', ''),
-            hardware_id=register_info.get('hardware_id') or camera_info.get('hardware_id', ''),
-            support_move=register_info.get('support_move') if register_info.get('support_move') is not None else camera_info.get('support_move', False),
-            support_zoom=register_info.get('support_zoom') if register_info.get('support_zoom') is not None else camera_info.get('support_zoom', False),
+            mac=reg_mac,
+            serial_number=reg_serial,
             nvr_id=nvr_id,
-            nvr_channel=nvr_channel,
-            rtsp_direct=register_info.get('rtsp_direct'),
-            channel_online=register_info.get('channel_online'),
-            connection_status=register_info.get('connection_status'),
-            enable_forward=register_info.get('enable_forward'),
-            directory_id=directory_id_for_new_device(register_info),
+            nvr_channel=nvr_channel if nvr_channel else None,
         )
-        
-        db.session.add(camera)
+        if existing:
+            id = existing.id
+            if source.strip().lower().startswith('gb28181://'):
+                rtmp_stream, http_stream, ai_rtmp_stream, ai_http_stream = gb28181_device_stream_urls(id)
+            else:
+                rtmp_stream, http_stream, ai_rtmp_stream, ai_http_stream = _generate_stream_urls(source, id)
+            existing.name = name
+            existing.source = source
+            existing.rtmp_stream = rtmp_stream
+            existing.http_stream = http_stream
+            existing.ai_rtmp_stream = ai_rtmp_stream
+            existing.ai_http_stream = ai_http_stream
+            existing.stream = register_info.get('stream', existing.stream or 0)
+            existing.ip = ip or ''
+            existing.port = port
+            existing.username = username
+            existing.password = password
+            existing.mac = reg_mac or existing.mac
+            existing.manufacturer = manufacturer.strip()
+            existing.model = model.strip()
+            existing.firmware_version = register_info.get('firmware_version') or camera_info.get('firmware_version', '') or existing.firmware_version
+            existing.serial_number = reg_serial or existing.serial_number
+            existing.hardware_id = register_info.get('hardware_id') or camera_info.get('hardware_id', '') or existing.hardware_id
+            existing.support_move = register_info.get('support_move') if register_info.get('support_move') is not None else camera_info.get('support_move', existing.support_move)
+            existing.support_zoom = register_info.get('support_zoom') if register_info.get('support_zoom') is not None else camera_info.get('support_zoom', existing.support_zoom)
+            existing.nvr_id = nvr_id
+            existing.nvr_channel = nvr_channel or 0
+            existing.rtsp_direct = register_info.get('rtsp_direct')
+            existing.channel_online = register_info.get('channel_online')
+            existing.connection_status = register_info.get('connection_status')
+            if register_info.get('enable_forward') is not None:
+                existing.enable_forward = register_info.get('enable_forward')
+            camera = existing
+            logger.info(f'设备 {id} 已存在，已更新（网段/直连登记）')
+        else:
+            # 创建设备记录，优先使用用户提供的字段，缺失的字段从ONVIF获取的信息中填充
+            camera = Device(
+                id=id,
+                name=name,
+                source=source,
+                rtmp_stream=rtmp_stream,
+                http_stream=http_stream,
+                ai_rtmp_stream=ai_rtmp_stream,
+                ai_http_stream=ai_http_stream,
+                stream=register_info.get('stream', 0),
+                ip=ip or '',
+                port=port,
+                username=username,
+                password=password,
+                mac=reg_mac,
+                manufacturer=manufacturer.strip(),
+                model=model.strip(),
+                firmware_version=register_info.get('firmware_version') or camera_info.get('firmware_version', ''),
+                serial_number=reg_serial,
+                hardware_id=register_info.get('hardware_id') or camera_info.get('hardware_id', ''),
+                support_move=register_info.get('support_move') if register_info.get('support_move') is not None else camera_info.get('support_move', False),
+                support_zoom=register_info.get('support_zoom') if register_info.get('support_zoom') is not None else camera_info.get('support_zoom', False),
+                nvr_id=nvr_id,
+                nvr_channel=nvr_channel,
+                rtsp_direct=register_info.get('rtsp_direct'),
+                channel_online=register_info.get('channel_online'),
+                connection_status=register_info.get('connection_status'),
+                enable_forward=register_info.get('enable_forward'),
+                directory_id=directory_id_for_new_device(register_info),
+            )
+            db.session.add(camera)
         try:
             db.session.commit()
-            if ip:
-                # 自定义摄像头默认在线
+            if ip and not is_nvr_channel:
+                # 自定义摄像头默认在线；NVR 通道不启动 IPC 在线探测
                 is_custom = is_custom or is_rtmp
                 _monitor.update(camera.id, ip, default_online=is_custom)
             elif is_custom or is_rtmp:
@@ -975,7 +1111,8 @@ def register_camera(register_info: dict) -> str:
             
             # 自动检查并创建推流转发任务
             # GB28181 虚拟摄像头由算法任务在运行时动态向 WVP 拉流，不需要创建独立推流转发任务
-            if not source.strip().lower().startswith('gb28181://'):
+            # NVR 挂载通道批量登记时不自动建推流任务，避免逐路拉流阻塞
+            if not is_nvr_channel and not source.strip().lower().startswith('gb28181://'):
                 try:
                     from app.services.stream_forward_service import ensure_device_stream_forward_task
                     ensure_device_stream_forward_task(id)
@@ -1249,6 +1386,28 @@ def update_camera(id: str, update_info: dict):
             camera.source = _get_stream(camera.source, update_info['stream'])
         except Exception as e:
             raise RuntimeError(f'码流调整失败: {str(e)}')
+
+    # NVR 挂载通道：仅更新库表字段，不触发 IPC ONVIF
+    if camera.nvr_id:
+        for k, v in (item for item in update_info.items() if item[1] is not None):
+            if k in _NVR_PAYLOAD_KEYS or k in ('nvr_id', 'nvr_channel', 'cameraType', 'skip_onvif'):
+                continue
+            if k in ('rtsp_direct', 'channel_online', 'connection_status') and hasattr(camera, k):
+                setattr(camera, k, v)
+                continue
+            if hasattr(camera, k):
+                setattr(camera, k, v)
+        if not camera.manufacturer or not camera.manufacturer.strip():
+            camera.manufacturer = 'EasyAIoT'
+        if not camera.model or not camera.model.strip():
+            camera.model = 'NVR-Channel'
+        try:
+            db.session.commit()
+            logger.info(f'设备 {id} 信息已更新（NVR 通道）')
+        except Exception as e:
+            db.session.rollback()
+            raise RuntimeError(f'数据库更新失败: {str(e)}') from e
+        return
 
     # 处理IP地址变更
     # 注意：IP地址变更时，如果ONVIF连接失败，不应该阻止其他字段的更新

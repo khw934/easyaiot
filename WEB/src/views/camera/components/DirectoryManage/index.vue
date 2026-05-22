@@ -146,9 +146,11 @@ import MoveDevicesToDirectoryModal from './MoveDevicesToDirectoryModal.vue';
 import {
   PlusOutlined,
 } from '@ant-design/icons-vue';
-import { formatCameraDeviceLabel } from '@/views/camera/utils/deviceLabel';
+import { formatCameraDeviceLabel, isNvrChannelDevice } from '@/views/camera/utils/deviceLabel';
+import { buildDirectoryDeviceTableRows, fetchNvrListBrief } from '@/views/camera/utils/nvrDeviceGroup';
+import { collectWvpGbChannelsForSync } from '@/views/camera/utils/wvpGbSync';
 
-withDefaults(
+const props = withDefaults(
   defineProps<{
     /** 嵌入分屏监控配置态时减少外边距 */
     embedded?: boolean;
@@ -174,6 +176,19 @@ const syncCamerasLoading = ref(false);
 
 // 设备流状态映射
 const deviceStreamStatuses = ref<Record<string, string>>({});
+/** 缓存 NVR 元数据，避免表格每次翻页都请求 */
+let cachedNvrsPromise: ReturnType<typeof fetchNvrListBrief> | null = null;
+
+function getCachedNvrs() {
+  if (!cachedNvrsPromise) {
+    cachedNvrsPromise = fetchNvrListBrief().catch(() => []);
+  }
+  return cachedNvrsPromise;
+}
+
+function invalidateNvrCache() {
+  cachedNvrsPromise = null;
+}
 
 // 过滤目录树（根据搜索文本）
 const filteredDirectoryTree = computed(() => {
@@ -479,8 +494,8 @@ const [registerTable, { reload: reloadDeviceTable }] = useTable({
       const total = response.code !== undefined ? response.total : (Array.isArray(data) ? data.length : 0);
       
       if (data && Array.isArray(data)) {
-        // 应用筛选条件
-        let filteredData = data;
+        const nvrs = await getCachedNvrs();
+        let filteredData = buildDirectoryDeviceTableRows(data, nvrs);
         
         if (params.name) {
           filteredData = filteredData.filter((device: DeviceInfo) => 
@@ -517,7 +532,7 @@ const [registerTable, { reload: reloadDeviceTable }] = useTable({
         
         return {
           data: devicesWithStatus,
-          total: devicesWithStatus.length,
+          total: typeof total === 'number' ? total : devicesWithStatus.length,
         };
       }
       return { data: [], total: 0 };
@@ -574,14 +589,27 @@ const [registerTable, { reload: reloadDeviceTable }] = useTable({
   showTableSetting: true,
   pagination: true,
   rowKey: 'id',
+  isTreeTable: true,
+  defaultExpandAllRows: false,
   canResize: true,
   rowSelection: {
     type: 'checkbox',
-    selectedRowKeys: checkedKeys,
+    // 勿传 selectedRowKeys：与 useTable 内部 watch 会形成 onChange 死循环导致页面卡死
     onChange: (keys: string[], rows: DeviceInfo[]) => {
-      checkedKeys.value = keys;
-      checkedRows.value = rows;
+      const nextKeys = keys.filter((k) => !String(k).startsWith('nvr_group_'));
+      const nextRows = rows.filter((r) => !(r as DeviceInfo & { _isNvrGroup?: boolean })._isNvrGroup);
+      if (
+        nextKeys.length === checkedKeys.value.length &&
+        nextKeys.every((k, i) => k === checkedKeys.value[i])
+      ) {
+        return;
+      }
+      checkedKeys.value = nextKeys;
+      checkedRows.value = nextRows;
     },
+    getCheckboxProps: (record: DeviceInfo & { _isNvrGroup?: boolean }) => ({
+      disabled: !!record._isNvrGroup || isNvrChannelDevice(record),
+    }),
   },
 });
 
@@ -663,7 +691,12 @@ const handleBatchMoveToDirectory = () => {
     createMessage.warning('请先选择目录');
     return;
   }
-  openMoveDevicesModal(checkedRows.value);
+  const movable = checkedRows.value.filter((r) => !isNvrChannelDevice(r));
+  if (!movable.length) {
+    createMessage.warning('请选择可移动的摄像头（NVR 挂载通道请通过 NVR 行批量移动）');
+    return;
+  }
+  openMoveDevicesModal(movable);
 };
 
 const handleMoveToDirectory = (record: DeviceInfo) => {
@@ -680,27 +713,54 @@ const handleMoveDevicesSuccess = () => {
 };
 
 // 获取表格操作按钮
-const getTableActions = (record: DeviceInfo) => {
-  const actions = [
-    {
+const getTableActions = (record: DeviceInfo & { _isNvrGroup?: boolean; children?: DeviceInfo[] }) => {
+  if (record._isNvrGroup) {
+    const channels = record.children || [];
+    if (!channels.length) return [];
+    return [
+      {
+        icon: 'ant-design:folder-open-outlined',
+        tooltip: '移动 NVR 下全部通道到目录',
+        onClick: () => openMoveDevicesModal(channels),
+      },
+      {
+        icon: 'ant-design:rollback-outlined',
+        tooltip: '移回默认分组',
+        popConfirm: {
+          title: '确定将 NVR 下全部通道移回默认分组？',
+          confirm: () => handleUnbindNvrGroupDirectory(channels),
+        },
+      },
+    ];
+  }
+
+  const actions: Array<Record<string, unknown>> = [];
+
+  if (!props.embedded) {
+    actions.push({
       icon: 'octicon:play-16',
       tooltip: '播放RTMP流',
-      onClick: () => handlePlay(record)
-    },
-    {
-      icon: 'ant-design:folder-open-outlined',
-      tooltip: '移动到目录',
-      onClick: () => handleMoveToDirectory(record),
-    },
-    {
-      icon: 'ant-design:rollback-outlined',
-      tooltip: '移回默认分组',
-      popConfirm: {
-        title: '确定将此设备移回默认分组？',
-        confirm: () => handleUnbindDirectory(record)
-      }
-    },
-  ];
+      onClick: () => handlePlay(record),
+    });
+  }
+
+  if (!isNvrChannelDevice(record)) {
+    actions.push(
+      {
+        icon: 'ant-design:folder-open-outlined',
+        tooltip: '移动到目录',
+        onClick: () => handleMoveToDirectory(record),
+      },
+      {
+        icon: 'ant-design:rollback-outlined',
+        tooltip: '移回默认分组',
+        popConfirm: {
+          title: '确定将此设备移回默认分组？',
+          confirm: () => handleUnbindDirectory(record),
+        },
+      },
+    );
+  }
 
   return actions;
 };
@@ -708,6 +768,39 @@ const getTableActions = (record: DeviceInfo) => {
 // 播放
 const handlePlay = (record: DeviceInfo) => {
   emit('play', record);
+};
+
+// NVR 下全部通道移回默认分组
+const handleUnbindNvrGroupDirectory = async (channels: DeviceInfo[]) => {
+  if (!channels.length) return;
+  try {
+    createMessage.loading({ content: '正在移回默认分组...', key: 'unbind-nvr' });
+    const results = await Promise.all(
+      channels.map((ch) => moveDeviceToDirectory(ch.id, 0)),
+    );
+    const failed = results.filter((r) => {
+      const result = (r as { code?: number }).code !== undefined ? r : { code: 0 };
+      return result.code !== 0;
+    });
+    if (failed.length) {
+      createMessage.error({
+        content: `${failed.length} 个通道移回失败`,
+        key: 'unbind-nvr',
+      });
+    } else {
+      createMessage.success({
+        content: `已将 ${channels.length} 个通道移回默认分组`,
+        key: 'unbind-nvr',
+      });
+      loadDirectoryList();
+      if (selectedDirectoryId.value) {
+        reloadDeviceTable();
+      }
+    }
+  } catch (error) {
+    console.error('NVR 通道移回默认分组失败', error);
+    createMessage.error({ content: '移回默认分组失败', key: 'unbind-nvr' });
+  }
 };
 
 // 移回默认分组
@@ -767,17 +860,34 @@ const handleSyncCameras = async () => {
     }
 
     try {
-      const response = await syncGb28181Devices();
-      const payload = response?.code !== undefined ? response.data : response;
+      const { channels, wvpDeviceCount } = await collectWvpGbChannelsForSync();
+      const payload = await syncGb28181Devices(channels);
       const created = payload?.created ?? 0;
       const total = payload?.total_gb_devices ?? 0;
-      parts.push(`国标新增 ${created} 个，共 ${total} 个`);
-    } catch (error) {
+      const wvpCount = payload?.wvp_device_count ?? wvpDeviceCount;
+      const channelsSeen = payload?.channels_seen ?? channels.length;
+      const upsertErrors = payload?.upsert_errors ?? [];
+      if (upsertErrors.length) {
+        parts.push(`入库失败：${upsertErrors[0]}`);
+      } else if (wvpDeviceCount > 0 && channels.length === 0) {
+        parts.push(`WVP 有 ${wvpDeviceCount} 个国标设备，但未解析到通道`);
+      } else if (wvpCount > 0 && total === 0) {
+        parts.push(
+          `WVP 有 ${wvpCount} 个国标设备、${channelsSeen} 个通道，但未入库（请检查 VIDEO 服务与数据库）`,
+        );
+      } else if (wvpCount === 0) {
+        parts.push('未从 WVP 拉取到国标设备，请检查 dev-api/gb28181 网关与 WVP 服务');
+      } else {
+        parts.push(`国标新增 ${created} 个，共 ${total} 个`);
+      }
+    } catch (error: any) {
       console.error('同步国标设备失败', error);
-      parts.push('国标同步失败，请检查 WVP 服务');
+      const errMsg = error?.message || error?.msg || '';
+      parts.push(errMsg ? `国标同步失败：${errMsg}` : '国标同步失败，请检查 WVP 服务与 GATEWAY_URL');
     }
 
     createMessage.success({ content: parts.join('；'), key: 'sync-cameras' });
+    invalidateNvrCache();
     await loadDirectoryList();
     if (selectedDirectoryId.value) {
       reloadDeviceTable();
@@ -801,6 +911,7 @@ const handleOpenJsonEditor = () => {
 
 // 目录操作成功回调
 const handleDirectorySuccess = () => {
+  invalidateNvrCache();
   loadDirectoryList();
   if (selectedDirectoryId.value) {
     reloadDeviceTable();

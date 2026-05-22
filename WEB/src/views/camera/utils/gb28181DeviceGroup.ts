@@ -1,10 +1,10 @@
 import type { DeviceInfo } from '@/api/device/camera';
 import { getDeviceList } from '@/api/device/camera';
-import { queryVideoList } from '@/api/device/gb28181';
+import { queryAllVideoList } from '@/api/device/gb28181';
 import { isGb28181Device, parseGb28181Source } from './deviceLabel';
 import {
   buildCardRowsWithNvr,
-  fetchNvrList,
+  fetchNvrListBrief,
   filterStandaloneDirectDevices,
   nvrToTableRow,
 } from './nvrDeviceGroup';
@@ -40,8 +40,15 @@ export function filterDirectDevices(devices: DeviceInfo[]): DeviceInfo[] {
 }
 
 /** WVP 国标设备 → 卡片数据（与 gb28181/VideoCardList 字段一致） */
+/** 从 WVP 设备记录解析 SIP 国标编号（兼容多种字段名） */
+export function resolveWvpSipDeviceId(wvp: Record<string, any>): string {
+  return String(
+    wvp.deviceIdentification ?? wvp.deviceId ?? wvp.id ?? wvp.gbId ?? '',
+  ).trim();
+}
+
 export function wvpDeviceToSummary(wvp: Record<string, any>): GbSipDeviceSummary {
-  const sipDeviceId = String(wvp.deviceIdentification ?? wvp.deviceId ?? '').trim();
+  const sipDeviceId = resolveWvpSipDeviceId(wvp);
   return {
     sipDeviceId,
     name: String(wvp.name || sipDeviceId).trim(),
@@ -97,13 +104,11 @@ export async function fetchMergedDeviceList(params: Record<string, any> = {}) {
       search: search || undefined,
       online: online !== undefined && online !== '' ? online : undefined,
     }),
-    queryVideoList({
-      page: 1,
-      count: 10000,
+    queryAllVideoList({
       query: search || undefined,
       status: online === true || online === 'true' ? true : online === false || online === 'false' ? false : undefined,
     }),
-    fetchNvrList(),
+    fetchNvrListBrief(),
   ]);
 
   const allDevices = devRes?.data ?? [];
@@ -135,7 +140,7 @@ export function buildMergedCardRows(
   const gbItems: DeviceListDisplayItem[] = [];
   const seenSip = new Set<string>();
   for (const wvp of wvpDevices || []) {
-    const sipId = String(wvp.deviceIdentification ?? wvp.deviceId ?? '').trim();
+    const sipId = resolveWvpSipDeviceId(wvp);
     if (!sipId || seenSip.has(sipId)) continue;
     seenSip.add(sipId);
     gbItems.push({ kind: 'gb_sip' as const, gbItem: wvpDeviceToCardItem(wvp) });

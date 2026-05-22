@@ -1,7 +1,7 @@
 <template>
   <div :class="['split-screen-container', { 'fullscreen-mode': state.isFull }]">
     <a-layout class="monitor-layout">
-      <a-layout-sider :width="320" class="device-tree-sider" theme="light">
+      <a-layout-sider :width="350" class="device-tree-sider" theme="light">
         <CollapseContainer :can-expan="true" title="设备目录" class="tree-container">
           <template #title>
             <div class="tree-header-title">
@@ -20,7 +20,7 @@
               <BasicArrow up :expand="expand" @click="onClick" />
             </div>
           </template>
-          <ScrollContainer class="tree-scroll">
+          <div class="tree-scroll">
             <BasicTree
               search
               :showIcon="true"
@@ -30,12 +30,11 @@
               :tree-data="treeData"
               :load-data="onLoadGbDeviceChannels"
               :field-names="{ key: 'key', title: 'title' }"
-              :action-list="treeActionList"
               class="device-tree"
               @select="handleTreeSelect"
               @update:expanded-keys="expandedKeys = $event"
             />
-          </ScrollContainer>
+          </div>
         </CollapseContainer>
       </a-layout-sider>
 
@@ -132,15 +131,11 @@
       </a-layout>
     </a-layout>
 
-    <MoveDevicesToDirectoryModal
-      @register="registerMoveModal"
-      @success="handleMoveDevicesSuccess"
-    />
   </div>
 </template>
 
 <script lang="ts" setup>
-import { computed, type CSSProperties, h, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
+import { computed, type CSSProperties, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import {
   Layout as ALayout,
   LayoutSider as ALayoutSider,
@@ -152,17 +147,16 @@ import {
   RadioButton as ARadioButton,
   Checkbox as ACheckbox,
   Button as AButton,
-  Tooltip as ATooltip,
 } from 'ant-design-vue';
-import { BasicTree, type TreeActionItem, type TreeItem } from '@/components/Tree';
-import { useModal } from '@/components/Modal';
+import { BasicTree, type TreeItem } from '@/components/Tree';
 import { BasicArrow } from '@/components/Basic';
 import { Icon } from '@/components/Icon';
-import { CollapseContainer, ScrollContainer } from '@/components/Container';
+import { CollapseContainer } from '@/components/Container';
 import {
   getDirectoryMonitorTree,
   syncGb28181Devices,
   type MonitorTreeDeviceNode,
+  type MonitorTreeDirectoryNode,
 } from '@/api/device/camera';
 import { formatCameraDeviceLabel, isGb28181Device } from '@/views/camera/utils/deviceLabel';
 import {
@@ -172,23 +166,24 @@ import {
 } from '@/views/camera/utils/devicePlay';
 import {
   buildMonitorDirectoryTreeNodes,
-  canShowMonitorDeviceMoveAction,
-  canShowMonitorDirectoryBatchMoveAction,
-  collectMoveableDevicesUnderNode,
   collectMonitorTreeExpandedKeys,
   findMonitorDeviceById,
   findMonitorGbDeviceByChannel,
   findMonitorTreeNodeByKey,
 } from '@/views/camera/utils/monitorDeviceTree';
-import MoveDevicesToDirectoryModal from '../DirectoryManage/MoveDevicesToDirectoryModal.vue';
 import {
   buildWvpChannelTreeNodes,
   parseGbChannelKey,
   type GbChannelRef,
 } from '@/views/camera/utils/gb28181Tree';
 import { getDeviceChannels, queryVideoList } from '@/api/device/gb28181';
+import type { NvrInfo } from '@/api/device/camera';
+import { fetchNvrListBrief } from '@/views/camera/utils/nvrDeviceGroup';
+import { buildMonitorTreeOptionsFromNvrList } from '@/views/camera/utils/monitorDeviceTree';
+import { collectWvpGbChannelsForSync } from '@/views/camera/utils/wvpGbSync';
 import {
   buildGbSipNameMap,
+  buildGbSipNameMapFromDirectoryTree,
   enrichWvpChannelTreeNodes,
   resolveMonitorGbChannelDisplayName,
 } from '@/views/camera/utils/monitorGbDisplay';
@@ -203,7 +198,6 @@ interface PlayCell {
 }
 
 const { createMessage } = useMessage();
-const [registerMoveModal, { openModal: openMoveModal }] = useModal();
 
 /** 勾选后点播 AI 流（检测框由算法任务烧录在此路流上） */
 const enableAi = ref(true);
@@ -213,79 +207,6 @@ const expandedKeys = ref<string[]>([]);
 const treeData = ref<TreeItem[]>([]);
 const treeLoading = ref(false);
 const playerRefs = ref<any[]>([]);
-
-function openMoveDevicesModal(devices: MonitorTreeDeviceNode[]) {
-  if (!devices.length) {
-    createMessage.warning('该节点下没有可移动的摄像头');
-    return;
-  }
-  openMoveModal(true, {
-    deviceIds: devices.map((d) => d.id),
-  });
-}
-
-function handleBatchMoveDirectory(node: TreeItem) {
-  openMoveDevicesModal(collectMoveableDevicesUnderNode(node));
-}
-
-function handleMoveDevice(node: TreeItem) {
-  const device = (node as any).device as MonitorTreeDeviceNode | undefined;
-  if (device) {
-    openMoveDevicesModal([device]);
-    return;
-  }
-  const devices = collectMoveableDevicesUnderNode(node);
-  if (devices.length === 1) {
-    openMoveDevicesModal(devices);
-  }
-}
-
-async function handleMoveDevicesSuccess() {
-  await loadMonitorTree();
-}
-
-const treeActionList: TreeActionItem[] = [
-  {
-    show: canShowMonitorDirectoryBatchMoveAction,
-    render: (node) =>
-      h(
-        ATooltip,
-        { title: '批量移动到目录' },
-        {
-          default: () =>
-            h(AButton, {
-              type: 'link',
-              size: 'small',
-              class: 'tree-move-btn',
-              onClick: (e: Event) => {
-                e.stopPropagation();
-                handleBatchMoveDirectory(node as TreeItem);
-              },
-            }, () => h(Icon, { icon: 'ant-design:folder-open-outlined', size: 14 })),
-        },
-      ),
-  },
-  {
-    show: canShowMonitorDeviceMoveAction,
-    render: (node) =>
-      h(
-        ATooltip,
-        { title: '移动到目录' },
-        {
-          default: () =>
-            h(AButton, {
-              type: 'link',
-              size: 'small',
-              class: 'tree-move-btn',
-              onClick: (e: Event) => {
-                e.stopPropagation();
-                handleMoveDevice(node as TreeItem);
-              },
-            }, () => h(Icon, { icon: 'ant-design:export-outlined', size: 14 })),
-        },
-      ),
-  },
-];
 
 const state = reactive({
   playCells: [] as (PlayCell | null)[],
@@ -482,15 +403,42 @@ const onLoadGbDeviceChannels: TreeProps['loadData'] = (treeNode) => {
   });
 };
 
+function normalizeMonitorTreePayload(res: unknown): MonitorTreeDirectoryNode[] {
+  const payload = (res as { code?: number; data?: { tree?: unknown } })?.code !== undefined
+    ? (res as { data?: { tree?: unknown } }).data
+    : res;
+  if (Array.isArray((payload as { tree?: unknown })?.tree)) {
+    return (payload as { tree: MonitorTreeDirectoryNode[] }).tree;
+  }
+  if (Array.isArray(payload)) {
+    return payload as MonitorTreeDirectoryNode[];
+  }
+  return [];
+}
+
+/** 目录 + NVR 元数据 + WVP 国标设备列表；国标通道展开时再按需请求 WVP */
 async function fetchMonitorTree() {
-  const [res, gbRes] = await Promise.all([
+  const [res, gbRes, nvrs] = await Promise.all([
     getDirectoryMonitorTree(),
-    queryVideoList({ page: 1, count: 10000 }),
+    queryVideoList({ page: 1, count: 10000 }).catch(() => ({ data: [] as Record<string, any>[] })),
+    fetchNvrListBrief().catch(() => [] as NvrInfo[]),
   ]);
-  const payload = res?.code !== undefined ? res.data : res;
-  const tree = payload?.tree ?? [];
-  const sipNameMap = buildGbSipNameMap(gbRes?.data ?? []);
-  treeData.value = buildMonitorDirectoryTreeNodes(tree, { sipNameMap });
+  const tree = normalizeMonitorTreePayload(res);
+  const wvpDevices = Array.isArray(gbRes?.data) ? gbRes.data : [];
+  const nvrList = Array.isArray(nvrs) ? nvrs.filter((n) => n && n.id != null) : [];
+
+  const sipNameMap = buildGbSipNameMap(wvpDevices);
+  buildGbSipNameMapFromDirectoryTree(tree).forEach((name, sip) => {
+    if (!sipNameMap.has(sip)) sipNameMap.set(sip, name);
+  });
+
+  const { nvrNameMap, nvrs: nvrArr } = buildMonitorTreeOptionsFromNvrList(nvrList);
+  treeData.value = buildMonitorDirectoryTreeNodes(tree, {
+    sipNameMap,
+    nvrNameMap,
+    nvrs: nvrArr,
+    wvpDevices,
+  });
   expandedKeys.value = collectMonitorTreeExpandedKeys(treeData.value);
 }
 
@@ -512,11 +460,20 @@ async function handleRefresh() {
   try {
     treeLoading.value = true;
     try {
-      const response = await syncGb28181Devices();
-      const payload = response?.code !== undefined ? response.data : response;
+      const { channels } = await collectWvpGbChannelsForSync();
+      const payload = await syncGb28181Devices(channels);
       const created = payload?.created ?? 0;
       const total = payload?.total_gb_devices ?? 0;
-      createMessage.success(`同步完成：新增 ${created} 个，共 ${total} 个国标设备`);
+      const wvpCount = payload?.wvp_device_count ?? 0;
+      if (wvpCount > 0 && total === 0) {
+        createMessage.warning(
+          `WVP 有 ${wvpCount} 个国标设备，但未入库；请检查 VIDEO 服务与数据库`,
+        );
+      } else if (wvpCount === 0) {
+        createMessage.warning('未从 WVP 拉取到国标设备，请检查 dev-api/gb28181 网关');
+      } else {
+        createMessage.success(`同步完成：新增 ${created} 个，共 ${total} 个国标设备`);
+      }
     } catch (e) {
       console.error(e);
       createMessage.error('同步国标设备失败，请检查 WVP 服务与网络');
@@ -591,6 +548,11 @@ async function handleTreeSelect(keys: string[] | string) {
 
   if (String(key).startsWith('gb_dev_')) {
     createMessage.info('请展开国标设备并选择具体通道');
+    return;
+  }
+
+  if (String(key).startsWith('nvr_')) {
+    createMessage.info('请展开 NVR 并选择具体通道');
     return;
   }
 
@@ -775,10 +737,42 @@ defineExpose({ refresh: handleRefresh });
   overflow: hidden;
   border-right: 1px solid #e5e7eb;
 
+  :deep(.ant-layout-sider-children) {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+
   .tree-container {
     height: 100%;
     display: flex;
     flex-direction: column;
+    min-height: 0;
+
+    /* 仅让折叠内容区占满剩余高度，不改变标题栏样式 */
+    :deep(> .p-2) {
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+
+      > * {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+    }
+
+    :deep(.xingyuv-collapse-container__body) {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
   }
 }
 
@@ -799,9 +793,36 @@ defineExpose({ refresh: handleRefresh });
 }
 
 .tree-scroll {
-  max-height: calc(100% - 48px);
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
 
   :deep(.device-tree) {
+    flex: 1;
+    min-height: 0;
+    height: 100%;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+
+    .ant-spin-nested-loading,
+    .ant-spin-container {
+      flex: 1;
+      min-height: 0;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .scroll-container {
+      flex: 1;
+      min-height: 0;
+    }
+
     .ant-tree-switcher {
       width: 16px;
       margin-inline-end: 2px;
@@ -821,18 +842,7 @@ defineExpose({ refresh: handleRefresh });
     .ant-tree-title,
     [class*='-tree__title'] {
       padding-left: 0 !important;
-      padding-right: 52px;
-    }
-
-    .tree-move-btn {
-      height: 22px;
-      padding: 0 4px;
-      line-height: 22px;
-      color: #6b7280;
-
-      &:hover {
-        color: #3b82f6;
-      }
+      padding-right: 8px;
     }
   }
 }

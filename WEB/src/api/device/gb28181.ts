@@ -111,6 +111,27 @@ export const queryVideoList = async (params: {
   return { data: normalizeDeviceList(data), total };
 };
 
+/** 拉取全部国标 SIP 设备（自动分页，避免单页遗漏） */
+export const queryAllVideoList = async (
+  params: Omit<Parameters<typeof queryVideoList>[0], 'page' | 'count' | 'pageNum' | 'pageSize'> = {},
+) => {
+  const pageSize = 500;
+  let page = 1;
+  let all: Record<string, any>[] = [];
+  let total = 0;
+  const maxPages = 200;
+  do {
+    const res = await queryVideoList({ ...params, page, count: pageSize });
+    const batch = res.data ?? [];
+    if (!batch.length) break;
+    total = res.total ?? all.length + batch.length;
+    all = all.concat(batch);
+    if (batch.length < pageSize || all.length >= total) break;
+    page += 1;
+  } while (page <= maxPages);
+  return { data: all, total: all.length };
+};
+
 /**
  * 查询单个设备
  * @param deviceId 设备国标编号

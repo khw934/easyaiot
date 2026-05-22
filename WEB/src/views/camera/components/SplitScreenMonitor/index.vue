@@ -21,13 +21,13 @@
     </div>
 
     <DirectoryManage
-      v-show="viewMode === 'config'"
+      v-if="viewMode === 'config'"
       ref="directoryManageRef"
       embedded
       @play="(record) => emit('play', record)"
     />
 
-    <MonitorPanel v-show="viewMode === 'monitor'" ref="monitorPanelRef" />
+    <MonitorPanel v-if="viewMode === 'monitor'" ref="monitorPanelRef" />
   </div>
 </template>
 

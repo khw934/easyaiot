@@ -22,10 +22,24 @@ class Gb28181SyncError(RuntimeError):
 
 
 def _request_headers() -> dict:
+    """优先使用当前 HTTP 请求携带的 JWT（与前端 WVP 网关一致），否则回退环境变量。"""
     headers: dict = {}
+    try:
+        from flask import has_request_context, request
+
+        if has_request_context():
+            auth = (request.headers.get('X-Authorization') or request.headers.get('Authorization') or '').strip()
+            if auth:
+                headers['X-Authorization'] = auth if auth.lower().startswith('bearer ') else f'Bearer {auth}'
+                return headers
+    except Exception:
+        pass
+
     jwt_token = (os.getenv('JWT_TOKEN') or '').strip()
     if jwt_token:
-        headers['X-Authorization'] = f'Bearer {jwt_token}'
+        headers['X-Authorization'] = (
+            jwt_token if jwt_token.lower().startswith('bearer ') else f'Bearer {jwt_token}'
+        )
     return headers
 
 
@@ -37,55 +51,80 @@ def _http_timeout() -> Tuple[int, int]:
 
 
 def _extract_list(body: Any) -> List[dict]:
+    """与前端 normalizePageResponse 一致，兼容 WVP PageInfo 及网关双层 data 包装。"""
     if isinstance(body, list):
         return body
     if not isinstance(body, dict):
         return []
-    data = body.get('data', body)
-    if isinstance(data, list):
-        return data
-    if isinstance(data, dict):
-        return data.get('list') or data.get('records') or data.get('rows') or []
-    return []
+
+    page = body.get('data', body)
+    if isinstance(page, list):
+        return page
+    if not isinstance(page, dict):
+        return []
+
+    inner = page.get('data', page)
+    if isinstance(inner, list):
+        return inner
+    if isinstance(inner, dict):
+        return inner.get('list') or inner.get('records') or inner.get('rows') or []
+
+    return page.get('list') or page.get('records') or page.get('rows') or []
 
 
-def _gb28181_api_base() -> Optional[str]:
+def _query_api_roots() -> List[str]:
+    """候选 WVP device/query 根路径（与 gb28181_source 网关配置一致，按优先级尝试）。"""
+    roots: List[str] = []
+    seen: set[str] = set()
     for base in _candidate_bases():
         b = (base or '').strip().rstrip('/')
         if not b:
             continue
         if b.endswith('/device/query'):
-            return b
-        if b.endswith('/gb28181'):
-            return f'{b}/device/query'
-        if b.endswith('/api'):
-            return f'{b}/device/query'
-        return f'{b}/device/query'
-    return None
+            root = b
+        elif b.endswith('/gb28181'):
+            root = f'{b}/device/query'
+        elif b.endswith('/api'):
+            root = f'{b}/device/query'
+        else:
+            root = f'{b}/device/query'
+        if root not in seen:
+            seen.add(root)
+            roots.append(root)
+    return roots
 
 
 def _normalize_channel(item: dict, sip_device_id: str) -> Optional[Tuple[str, str, str]]:
-    """返回 (sip_device_id, channel_gb_id, display_name)。"""
+    """返回 (sip_device_id, channel_gb_id, display_name)。字段顺序与前端 normalizeWvpChannelItem 对齐。"""
+    sip = sip_device_id.strip()
     parent = str(
-        item.get('parentId')
-        or item.get('parentDeviceId')
+        item.get('parentDeviceId')
+        or item.get('parentId')
         or item.get('gbParentId')
-        or sip_device_id
+        or sip
         or '',
     ).strip()
+
     channel_id = str(
         item.get('channelId')
         or item.get('deviceChannelId')
         or item.get('gbDeviceId')
-        or item.get('deviceId')
-        or item.get('id')
-        or item.get('gbId')
         or '',
     ).strip()
+
+    if not channel_id:
+        dev_id = str(item.get('deviceId') or '').strip()
+        if dev_id and dev_id != parent and dev_id != sip:
+            channel_id = dev_id
+
+    if not channel_id and item.get('id') is not None:
+        raw_id = str(item.get('id')).strip()
+        if raw_id and raw_id != parent and raw_id != sip:
+            channel_id = raw_id
+
     if not parent or not channel_id:
         return None
-    if channel_id == parent:
-        return None
+
     name = (
         item.get('name')
         or item.get('channelName')
@@ -152,6 +191,28 @@ def _upsert_gb_device(sip_device_id: str, channel_id: str, name: str, default_di
     return True
 
 
+def _fetch_json_list(url: str, *, headers: dict, timeout: Tuple[int, int], params: dict) -> List[dict]:
+    response = requests.get(url, params=params, headers=headers, timeout=timeout)
+    response.raise_for_status()
+    return _extract_list(response.json())
+
+
+def _trigger_wvp_channel_sync(api_root: str, sip_id: str, headers: dict, timeout: Tuple[int, int]) -> None:
+    try:
+        requests.get(f'{api_root}/devices/{sip_id}/sync', headers=headers, timeout=timeout)
+    except Exception as e:
+        logger.debug(f'触发 WVP 通道同步 {sip_id} 失败: {e}')
+
+
+def _pull_wvp_gb_devices(api_root: str, headers: dict, timeout: Tuple[int, int]) -> List[dict]:
+    return _fetch_json_list(
+        f'{api_root}/devices',
+        headers=headers,
+        timeout=timeout,
+        params={'page': 1, 'count': 10000},
+    )
+
+
 def backfill_gb28181_ai_stream_urls() -> int:
     """为 device 表中 source 为 gb28181:// 且缺少 AI 推流地址的记录补全字段。"""
     prefix = GB28181_SOURCE_PREFIX.lower()
@@ -175,44 +236,133 @@ def backfill_gb28181_ai_stream_urls() -> int:
     return updated
 
 
-def sync_gb28181_channels_to_devices(*, strict: bool = False) -> int:
+def sync_gb28181_channels_from_payload(
+    channels: List[dict],
+    *,
+    strict: bool = False,
+) -> Dict[str, Any]:
+    """
+    将前端经 dev-api/gb28181 拉取的通道列表写入 device 表（与分屏监控同一 WVP 网关路径）。
+    """
+    stats: Dict[str, Any] = {
+        'created': 0,
+        'wvp_device_count': 0,
+        'channels_seen': 0,
+        'api_base': 'frontend-wvp',
+        'errors': [],
+        'upsert_errors': [],
+    }
+    if not channels:
+        msg = '未收到国标通道数据'
+        stats['errors'].append(msg)
+        if strict:
+            raise Gb28181SyncError(msg)
+        return stats
+
+    default_dir = get_or_create_default_directory()
+    created = 0
+    channels_seen = 0
+    sip_ids: set[str] = set()
+
+    for item in channels:
+        if not isinstance(item, dict):
+            continue
+        sip = str(
+            item.get('sipDeviceId')
+            or item.get('sip_device_id')
+            or item.get('deviceIdentification')
+            or '',
+        ).strip()
+        ch_id = str(
+            item.get('channelId')
+            or item.get('channel_id')
+            or item.get('gbDeviceId')
+            or '',
+        ).strip()
+        name = str(item.get('name') or item.get('channelName') or ch_id).strip()
+        if not sip or not ch_id:
+            continue
+        sip_ids.add(sip)
+        channels_seen += 1
+        try:
+            if _upsert_gb_device(sip, ch_id, name, default_dir.id):
+                created += 1
+        except Exception as e:
+            db.session.rollback()
+            err_msg = f'{sip}/{ch_id}: {e}'
+            logger.warning(f'同步国标通道失败 {err_msg}')
+            stats['upsert_errors'].append(err_msg)
+
+    sync_unassigned_devices_to_default_directory()
+    stats['created'] = created
+    stats['channels_seen'] = channels_seen
+    stats['wvp_device_count'] = len(sip_ids)
+    if created:
+        logger.info(f'国标通道（前端 WVP）同步完成，新增 {created} 个')
+    return stats
+
+
+def sync_gb28181_channels_to_devices(*, strict: bool = False) -> Dict[str, Any]:
     """
     拉取 WVP 国标设备与通道，写入/更新 device 表并归入默认分组。
-    返回本次新创建的设备数量。
 
+    返回统计：created、wvp_device_count、channels_seen、api_base、errors 等。
     strict=True 时 WVP 不可达会抛出 Gb28181SyncError（供手动同步接口使用）。
     """
-    api_root = _gb28181_api_base()
-    if not api_root:
+    api_roots = _query_api_roots()
+    stats: Dict[str, Any] = {
+        'created': 0,
+        'wvp_device_count': 0,
+        'channels_seen': 0,
+        'api_base': None,
+        'errors': [],
+    }
+
+    if not api_roots:
         msg = (
             '未配置国标服务地址，请设置 GATEWAY_URL（如 http://127.0.0.1:48080）'
             ' 或 GB28181_SERVICE_URL（如 http://127.0.0.1:48088/api）'
         )
         logger.warning(msg)
+        stats['errors'].append(msg)
         if strict:
             raise Gb28181SyncError(msg)
-        return 0
+        return stats
 
-    default_dir = get_or_create_default_directory()
-    created = 0
     headers = _request_headers()
     timeout = _http_timeout()
+    gb_devices: List[dict] = []
+    api_root: Optional[str] = None
+    fetch_errors: List[str] = []
 
-    try:
-        devices_resp = requests.get(
-            f'{api_root}/devices',
-            params={'page': 1, 'count': 10000},
-            headers=headers,
-            timeout=timeout,
-        )
-        devices_resp.raise_for_status()
-        gb_devices = _extract_list(devices_resp.json())
-    except Exception as e:
-        msg = f'拉取国标设备列表失败（{api_root}）: {e}'
+    for root in api_roots:
+        try:
+            batch = _pull_wvp_gb_devices(root, headers, timeout)
+            if batch:
+                gb_devices = batch
+                api_root = root
+                break
+            fetch_errors.append(f'{root}: 设备列表为空')
+        except Exception as e:
+            fetch_errors.append(f'{root}: {e}')
+
+    stats['errors'] = fetch_errors
+    stats['api_base'] = api_root
+
+    if not gb_devices:
+        msg = '拉取国标设备列表失败或列表为空'
+        if fetch_errors:
+            msg = f'{msg}（{"; ".join(fetch_errors)}）'
         logger.warning(msg)
+        stats['errors'] = fetch_errors or [msg]
         if strict:
-            raise Gb28181SyncError(msg) from e
-        return 0
+            raise Gb28181SyncError(msg)
+        return stats
+
+    stats['wvp_device_count'] = len(gb_devices)
+    default_dir = get_or_create_default_directory()
+    created = 0
+    channels_seen = 0
 
     for gb_dev in gb_devices:
         sip_id = str(
@@ -221,40 +371,53 @@ def sync_gb28181_channels_to_devices(*, strict: bool = False) -> int:
             or gb_dev.get('id')
             or '',
         ).strip()
-        if not sip_id:
+        if not sip_id or not api_root:
             continue
 
         try:
-            ch_resp = requests.get(
+            channels = _fetch_json_list(
                 f'{api_root}/devices/{sip_id}/channels',
-                params={'page': 1, 'count': 10000},
                 headers=headers,
                 timeout=timeout,
+                params={'page': 1, 'count': 10000},
             )
-            ch_resp.raise_for_status()
-            channels = _extract_list(ch_resp.json())
         except Exception as e:
             logger.debug(f'拉取国标设备 {sip_id} 通道失败: {e}')
-            continue
+            channels = []
+
+        if not channels and int(gb_dev.get('channelCount') or 0) > 0:
+            _trigger_wvp_channel_sync(api_root, sip_id, headers, timeout)
+            try:
+                channels = _fetch_json_list(
+                    f'{api_root}/devices/{sip_id}/channels',
+                    headers=headers,
+                    timeout=timeout,
+                    params={'page': 1, 'count': 10000},
+                )
+            except Exception as e:
+                logger.debug(f'WVP 通道同步后重拉 {sip_id} 失败: {e}')
 
         for ch in channels:
             normalized = _normalize_channel(ch, sip_id)
             if not normalized:
                 continue
+            channels_seen += 1
             parent_id, channel_id, ch_name = normalized
             try:
                 if _upsert_gb_device(parent_id, channel_id, ch_name, default_dir.id):
                     created += 1
             except Exception as e:
                 db.session.rollback()
-                logger.warning(
-                    f'同步国标通道失败 {parent_id}/{channel_id}: {e}',
-                )
+                logger.warning(f'同步国标通道失败 {parent_id}/{channel_id}: {e}')
 
     sync_unassigned_devices_to_default_directory()
+    stats['created'] = created
+    stats['channels_seen'] = channels_seen
     if created:
-        logger.info(f'国标通道同步完成，新增 {created} 个设备记录')
-    return created
+        logger.info(
+            f'国标通道同步完成，新增 {created} 个，WVP 设备 {len(gb_devices)} 个，通道 {channels_seen} 条'
+        )
+    return stats
 
 
 def ensure_directory_layout() -> None:

@@ -5,7 +5,15 @@
     <div class="props">
       <div class="prop">
         <div class="label">IP / 端口</div>
-        <div class="value">{{ item.ip }}:{{ item.port }}</div>
+        <div
+          class="value copyable-value"
+          style="cursor: pointer"
+          :title="copyTarget"
+          @click="handleCopy"
+        >
+          <span>{{ item.ip }}:{{ item.port }}</span>
+          <Icon icon="tdesign:copy-filled" :size="14" color="#4287FCFF" class="copy-icon" />
+        </div>
       </div>
       <div class="flex" style="justify-content: space-between">
         <div class="prop">
@@ -17,27 +25,37 @@
           <div class="value">{{ item.camera_count }} 路</div>
         </div>
       </div>
-      <div class="prop" v-if="item.rtsp_url">
-        <div class="label">RTSP</div>
-        <div class="value rtsp-value" :title="item.rtsp_url">{{ item.rtsp_url }}</div>
-      </div>
     </div>
-    <div class="btns" @click.stop>
-      <div class="btn" title="查看挂载设备" @click="emit('open', item)">
+    <div class="btns nvr-card-btns" @click.stop>
+      <div class="btn" title="挂载摄像头" @click="emit('open', item)">
         <Icon icon="ant-design:cluster-outlined" :size="16" color="#3B82F6" />
       </div>
-      <div class="btn" title="复制 RTSP" v-if="item.rtsp_url" @click="handleCopyRtsp">
-        <Icon icon="tdesign:copy-filled" :size="15" color="#4287FCFF" />
+      <div class="btn" title="详情" @click="emit('view', item)">
+        <Icon icon="ant-design:eye-filled" :size="15" color="#3B82F6" />
       </div>
+      <div class="btn" title="编辑" @click="emit('edit', item)">
+        <Icon icon="ant-design:edit-filled" :size="15" color="#3B82F6" />
+      </div>
+      <Popconfirm
+        title="删除后挂载摄像头将解除关联，是否确认？"
+        ok-text="是"
+        cancel-text="否"
+        @confirm="emit('delete', item)"
+      >
+        <div class="btn">
+          <Icon icon="material-symbols:delete-outline-rounded" :size="15" color="#DC2626" />
+        </div>
+      </Popconfirm>
     </div>
   </div>
   <div class="product-img nvr-card-img">
-    <img :src="deviceImage" alt="" class="img" @click="emit('open', item)" />
+    <img :src="deviceImage" alt="" class="img" @click="emit('view', item)" />
   </div>
 </template>
 
 <script lang="ts" setup>
 import { computed } from 'vue';
+import { Popconfirm } from 'ant-design-vue';
 import { Icon } from '@/components/Icon';
 import { useMessage } from '@/hooks/web/useMessage';
 import { copyText } from '@/utils/copyTextToClipboard';
@@ -47,8 +65,16 @@ import OTHER_IMAGE from '@/assets/images/video/other.png';
 import type { NvrCardItem } from '@/views/camera/utils/nvrDeviceGroup';
 
 const props = defineProps<{ item: NvrCardItem }>();
-const emit = defineEmits<{ open: [item: NvrCardItem] }>();
+const emit = defineEmits<{
+  open: [item: NvrCardItem];
+  view: [item: NvrCardItem];
+  edit: [item: NvrCardItem];
+  delete: [item: NvrCardItem];
+}>();
+
 const { createMessage } = useMessage();
+
+const copyTarget = computed(() => `${props.item.ip}:${props.item.port}`);
 
 const deviceImage = computed(() => {
   const v = (props.item.vendor_label || '').toLowerCase();
@@ -57,20 +83,27 @@ const deviceImage = computed(() => {
   return OTHER_IMAGE;
 });
 
-function handleCopyRtsp() {
-  if (!props.item.rtsp_url) return;
-  copyText(props.item.rtsp_url, 'RTSP 已复制');
-  createMessage.success('已复制');
+function handleCopy() {
+  copyText(copyTarget.value, '已复制');
+  createMessage.success('复制成功');
 }
 </script>
 
 <style lang="less" scoped>
-.nvr-card-info .rtsp-value {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 100%;
+.nvr-card-info .copyable-value {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+
+  .copy-icon {
+    flex-shrink: 0;
+  }
 }
+
+.nvr-card-btns {
+  width: 200px !important;
+}
+
 .nvr-card-img .img {
   cursor: pointer;
 }

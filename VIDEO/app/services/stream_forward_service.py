@@ -18,6 +18,8 @@ import json
 
 logger = logging.getLogger(__name__)
 
+_NVR_STREAM_FORWARD_MARKER_PREFIX = 'nvr_stream_forward:nvr_id:'
+
 
 def create_stream_forward_task(task_name: str,
                                device_ids: Optional[List[str]] = None,
@@ -300,6 +302,87 @@ def restart_stream_forward_task(task_id: int) -> StreamForwardTask:
     except Exception as e:
         logger.error(f"重启推流转发任务失败: {str(e)}", exc_info=True)
         raise
+
+
+def _nvr_stream_forward_marker(nvr_id: int) -> str:
+    return f'{_NVR_STREAM_FORWARD_MARKER_PREFIX}{nvr_id}'
+
+
+def _find_nvr_stream_forward_task(nvr_id: int) -> Optional[StreamForwardTask]:
+    marker = _nvr_stream_forward_marker(nvr_id)
+    return StreamForwardTask.query.filter(
+        StreamForwardTask.description.contains(marker),
+    ).order_by(StreamForwardTask.id.desc()).first()
+
+
+def ensure_nvr_stream_forward_task(nvr_id: int) -> Optional[StreamForwardTask]:
+    """确保 NVR 下属全部 RTSP 挂载通道共用一个推流转发任务，不存在则创建并启动。"""
+    from models import Nvr
+
+    try:
+        nvr = Nvr.query.get(nvr_id)
+        if not nvr:
+            logger.warning(f'NVR {nvr_id} 不存在，无法创建推流转发任务')
+            return None
+
+        devices = Device.query.filter_by(nvr_id=nvr_id).all()
+        device_ids = [
+            d.id for d in devices
+            if d.source
+            and d.source.strip()
+            and not d.source.strip().lower().startswith('gb28181://')
+        ]
+        if not device_ids:
+            logger.info(f'NVR {nvr_id} 下无可推流的 RTSP 通道，跳过推流转发任务')
+            return None
+
+        nvr_label = (nvr.name or nvr.ip or str(nvr_id)).strip()
+        marker = _nvr_stream_forward_marker(nvr_id)
+        description = f'NVR {nvr_label} 下属通道自动推流转发 ({marker})'
+        task = _find_nvr_stream_forward_task(nvr_id)
+        was_running = bool(task and task.is_enabled)
+
+        if task:
+            current_ids = {d.id for d in task.devices}
+            new_ids = set(device_ids)
+            if current_ids != new_ids or task.total_streams != len(device_ids):
+                update_stream_forward_task(
+                    task.id,
+                    device_ids=device_ids,
+                    description=description,
+                )
+                task = StreamForwardTask.query.get(task.id)
+            if was_running:
+                try:
+                    restart_stream_forward_task(task.id)
+                    logger.info(
+                        f'已更新并重启 NVR 推流转发任务: nvr_id={nvr_id}, task_id={task.id}, '
+                        f'channels={len(device_ids)}',
+                    )
+                except Exception as e:
+                    logger.warning(f'NVR 推流转发任务重启失败: task_id={task.id}, error={e}')
+            return task
+
+        task_name = f'{nvr_label}-推流转发'
+        task = create_stream_forward_task(
+            task_name=task_name,
+            device_ids=device_ids,
+            output_format='rtmp',
+            output_quality='high',
+            description=description,
+            is_enabled=False,
+        )
+        try:
+            start_stream_forward_task(task.id)
+            logger.info(
+                f'为 NVR {nvr_id} 创建并启动推流转发任务: task_id={task.id}, channels={len(device_ids)}',
+            )
+        except Exception as e:
+            logger.warning(f'NVR 推流转发任务创建成功但启动失败: task_id={task.id}, error={e}')
+        return task
+    except Exception as e:
+        logger.error(f'为 NVR {nvr_id} 确保推流转发任务失败: {e}', exc_info=True)
+        return None
 
 
 def ensure_device_stream_forward_task(device_id: str) -> Optional[StreamForwardTask]:

@@ -57,13 +57,61 @@ export type DeviceListDisplayItem =
   | { kind: 'gb_sip'; gbItem: Record<string, unknown> }
   | { kind: 'nvr'; nvrItem: NvrCardItem };
 
-export async function fetchNvrList(): Promise<NvrInfo[]> {
+/** @param includeCameras 为 true 时拉取每路挂载通道（较重，仅 NVR 详情等场景使用） */
+export async function fetchNvrList(includeCameras = true): Promise<NvrInfo[]> {
   try {
-    const res = await getNvrList(true);
+    const res = await getNvrList(includeCameras);
     return Array.isArray(res) ? res : (res as { data?: NvrInfo[] })?.data ?? [];
   } catch {
     return [];
   }
+}
+
+/** 监控树/卡片列表仅需 NVR 元数据，避免 includeCameras 拖垮首屏 */
+export function fetchNvrListBrief(): Promise<NvrInfo[]> {
+  return fetchNvrList(false);
+}
+
+/** 设备目录表格：NVR 通道挂到 NVR 父行下（Ant Design Table children） */
+export function buildDirectoryDeviceTableRows(
+  devices: DeviceInfo[],
+  nvrs: NvrInfo[] = [],
+): DeviceInfo[] {
+  const nvrMap = new Map(nvrs.filter((n) => n.id).map((n) => [n.id!, n]));
+  const standalone: DeviceInfo[] = [];
+  const byNvr = new Map<number, DeviceInfo[]>();
+
+  for (const d of devices) {
+    if (isNvrChannelDevice(d) && d.nvr_id) {
+      const list = byNvr.get(d.nvr_id) || [];
+      list.push(d);
+      byNvr.set(d.nvr_id, list);
+    } else {
+      standalone.push(d);
+    }
+  }
+
+  const result: DeviceInfo[] = [...standalone];
+  const sortedNvrIds = [...byNvr.keys()].sort((a, b) => a - b);
+  for (const nvrId of sortedNvrIds) {
+    const channels = byNvr.get(nvrId)!;
+    channels.sort((a, b) => (a.nvr_channel ?? 0) - (b.nvr_channel ?? 0));
+    const nvr = nvrMap.get(nvrId);
+    result.push({
+      id: `nvr_group_${nvrId}`,
+      name: formatNvrDisplayName(nvr || { id: nvrId, ip: `NVR-${nvrId}` }),
+      device_kind: 'nvr',
+      ip: nvr?.ip ?? '-',
+      port: nvr?.port ?? 80,
+      manufacturer: nvr?.vendor_label || nvr?.vendor || 'NVR',
+      model: nvr?.model ?? '-',
+      online: true,
+      channel_count: channels.length,
+      children: channels,
+      _isNvrGroup: true,
+    } as DeviceInfo & { _isNvrGroup: boolean; children: DeviceInfo[] });
+  }
+  return result;
 }
 
 export function buildCardRowsWithNvr(

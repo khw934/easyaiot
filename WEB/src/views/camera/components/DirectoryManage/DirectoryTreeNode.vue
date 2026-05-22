@@ -71,7 +71,7 @@
         :level="level + 1"
         :expanded-keys="expandedKeys"
         :selected-id="selectedId"
-        @toggle="$emit('toggle', $event, level + 1)"
+        @toggle="(id, lvl) => $emit('toggle', id, lvl)"
         @select="$emit('select', $event)"
         @edit="$emit('edit', $event)"
         @delete="$emit('delete', $event)"

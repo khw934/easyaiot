@@ -1,20 +1,22 @@
 <template>
-  <BasicModal
+  <BasicDrawer
+    v-bind="$attrs"
     @register="register"
-    :title="modalTitle"
-    :width="1100"
-    :canFullscreen="true"
+    :title="drawerTitle"
+    width="1280"
+    placement="right"
+    :showFooter="true"
     :showOkBtn="false"
     cancelText="关闭"
-    @cancel="handleClose"
+    @close="handleClose"
   >
-    <Spin :spinning="state.scanning || state.enumerating || state.registering">
+    <Spin :spinning="state.scanning || state.registering">
       <div class="segment-scan-modal">
         <Alert
           type="info"
           show-icon
           class="scan-tip"
-          message="填写网段与 Web 登录凭证后扫描。支持 CIDR（如 192.168.1.0/24）、IP 范围（10.0.0.1-50）、单 IP 及 IP:端口。"
+          message="填写网段与 Web 登录凭证后扫描；可添加多组用户名密码，将按从上到下的顺序依次尝试。支持 CIDR（如 192.168.1.0/24）、IP 范围（10.0.0.1-50）、单 IP 及 IP:端口。"
         />
         <Form layout="vertical" class="scan-form">
           <Row :gutter="16">
@@ -28,19 +30,47 @@
                 />
               </FormItem>
             </Col>
-            <Col :span="8">
+            <Col :span="24">
               <FormItem label="端口">
                 <Input v-model:value="form.ports" placeholder="80,443,8000,8443" :disabled="state.scanning" />
               </FormItem>
             </Col>
-            <Col :span="8">
-              <FormItem label="用户名" required>
-                <Input v-model:value="form.username" placeholder="admin" :disabled="state.scanning" />
-              </FormItem>
-            </Col>
-            <Col :span="8">
-              <FormItem label="密码" required>
-                <Input.Password v-model:value="form.password" :disabled="state.scanning" />
+            <Col :span="24">
+              <FormItem label="Web 登录凭证" required>
+                <div class="credentials-block">
+                  <div
+                    v-for="(cred, idx) in form.credentials"
+                    :key="idx"
+                    class="credential-row"
+                  >
+                    <span class="cred-order">{{ idx + 1 }}</span>
+                    <Input
+                      v-model:value="cred.username"
+                      placeholder="用户名"
+                      :disabled="state.scanning"
+                      class="cred-user"
+                    />
+                    <Input.Password
+                      v-model:value="cred.password"
+                      placeholder="密码"
+                      :disabled="state.scanning"
+                      class="cred-pass"
+                    />
+                    <a-button
+                      type="link"
+                      danger
+                      size="small"
+                      :disabled="state.scanning || form.credentials.length <= 1"
+                      @click="removeCredential(idx)"
+                    >
+                      删除
+                    </a-button>
+                  </div>
+                  <a-button type="dashed" block :disabled="state.scanning" @click="addCredential">
+                    添加凭证
+                  </a-button>
+                  <div class="cred-hint">按列表顺序从上到下依次尝试，留空用户名的行将被忽略</div>
+                </div>
               </FormItem>
             </Col>
             <Col :span="6">
@@ -64,84 +94,77 @@
               <template #icon><SearchOutlined /></template>
               开始扫描
             </a-button>
-            <a-button v-if="state.mode === 'nvr' && state.nvrInventory" @click="backToNvrList">返回 NVR 列表</a-button>
             <span v-if="state.scanProgress" class="progress-text">{{ state.scanProgress }}</span>
           </div>
         </Form>
 
-        <div v-if="state.mode === 'camera' && state.devices.length" class="result-section">
-          <div class="result-title">扫描结果（{{ state.devices.length }}）</div>
-          <Table
-            :columns="cameraColumns"
-            :data-source="state.devices"
-            :pagination="{ pageSize: 10 }"
-            row-key="ip"
-            size="small"
-            bordered
-          >
-            <template #bodyCell="{ column, record }">
-              <template v-if="column.dataIndex === 'action'">
-                <a-button
-                  type="link"
-                  size="small"
-                  :disabled="!record.rtsp_url && !record.is_recognized"
-                  @click="handleRegisterCamera(record)"
-                >
-                  注册
-                </a-button>
-              </template>
+        <Alert
+          v-if="hasScanResult"
+          type="success"
+          show-icon
+          class="result-hint"
+          :message="resultHintText"
+        >
+          <template #action>
+            <a-button type="primary" size="small" @click="openResultModal(true)">查看扫描结果</a-button>
+          </template>
+        </Alert>
+      </div>
+    </Spin>
+  </BasicDrawer>
+
+  <BasicModal
+    @register="registerResultModal"
+    :title="resultModalTitle"
+    :width="1500"
+    :canFullscreen="true"
+    :showOkBtn="false"
+    cancelText="关闭"
+    :destroyOnClose="false"
+    @cancel="handleResultModalClose"
+  >
+    <Spin :spinning="state.registering">
+      <div class="segment-scan-result-modal">
+        <Table
+          v-if="resultTableKind === 'camera'"
+          :columns="cameraColumns"
+          :data-source="state.devices"
+          :pagination="tablePagination"
+          :scroll="{ x: 1200 }"
+          row-key="ip"
+          size="middle"
+          bordered
+        >
+          <template #bodyCell="{ column, record }">
+            <template v-if="column.dataIndex === 'action'">
+              <a-button
+                type="link"
+                size="small"
+                :disabled="!record.rtsp_url && !record.is_recognized"
+                @click="handleRegisterCamera(record)"
+              >
+                注册
+              </a-button>
             </template>
-          </Table>
-        </div>
+          </template>
+        </Table>
 
-        <template v-if="state.mode === 'nvr'">
-          <div v-if="!state.nvrInventory && state.devices.length" class="result-section">
-            <div class="result-title">发现的 NVR（{{ state.devices.length }}）</div>
-            <Table
-              :columns="nvrColumns"
-              :data-source="state.devices"
-              :pagination="{ pageSize: 10 }"
-              row-key="ip"
-              size="small"
-              bordered
-            >
-              <template #bodyCell="{ column, record }">
-                <template v-if="column.dataIndex === 'action'">
-                  <a-button type="link" size="small" @click="handleRegisterNvrOnly(record)">登记NVR</a-button>
-                  <a-button type="link" size="small" @click="handleEnumerate(record)">枚举通道</a-button>
-                </template>
-              </template>
-            </Table>
-          </div>
-
-          <div v-if="state.nvrInventory" class="result-section">
-            <div class="result-title">
-              NVR {{ state.nvrInventory.nvr_ip }} — 下属摄像头（{{ channelRows.length }}）
-            </div>
-            <p v-if="state.nvrInventory.error" class="nvr-warn">{{ state.nvrInventory.error }}</p>
-            <Table
-              :columns="channelColumns"
-              :data-source="channelRows"
-              :pagination="{ pageSize: 10 }"
-              row-key="channel_id"
-              size="small"
-              bordered
-            >
-              <template #bodyCell="{ column, record }">
-                <template v-if="column.dataIndex === 'action'">
-                  <a-button
-                    type="link"
-                    size="small"
-                    :disabled="!record.rtsp_url && !record.rtsp_direct"
-                    @click="handleRegisterChannel(record)"
-                  >
-                    注册
-                  </a-button>
-                </template>
-              </template>
-            </Table>
-          </div>
-        </template>
+        <Table
+          v-else-if="resultTableKind === 'nvr'"
+          :columns="nvrColumns"
+          :data-source="state.devices"
+          :pagination="tablePagination"
+          :scroll="{ x: 1100 }"
+          row-key="ip"
+          size="middle"
+          bordered
+        >
+          <template #bodyCell="{ column, record }">
+            <template v-if="column.dataIndex === 'action'">
+              <a-button type="link" size="small" @click="handleRegisterNvrWithChannels(record)">登记NVR及通道</a-button>
+            </template>
+          </template>
+        </Table>
       </div>
     </Spin>
   </BasicModal>
@@ -162,20 +185,19 @@ import {
   Table,
 } from 'ant-design-vue';
 import { SearchOutlined } from '@ant-design/icons-vue';
-import { BasicModal, useModalInner } from '@/components/Modal';
+import { BasicDrawer, useDrawerInner } from '@/components/Drawer';
+import { BasicModal, useModal } from '@/components/Modal';
 import { useMessage } from '@/hooks/web/useMessage';
 import {
-  enumerateNvrChannels,
   registerDevice,
-  upsertNvr,
+  registerNvrWithChannels,
+  type NvrInfo,
   scanSegmentDevices,
-  type NvrChannelRow,
-  type NvrInventoryResult,
+  type CredentialPair,
   type SegmentScanDeviceRow,
 } from '@/api/device/camera';
 import {
   getCameraScanColumns,
-  getNvrChannelColumns,
   getNvrScanColumns,
 } from './Data';
 
@@ -192,46 +214,87 @@ const { createMessage } = useMessage();
 const state = reactive({
   mode: 'camera' as 'camera' | 'nvr',
   scanning: false,
-  enumerating: false,
   registering: false,
   devices: [] as SegmentScanDeviceRow[],
-  nvrInventory: null as NvrInventoryResult | null,
   scanProgress: '',
 });
 
 const form = reactive({
   targets: '',
   ports: '80,443,8000,8443',
-  username: 'admin',
-  password: '',
+  credentials: [{ username: 'admin', password: '' }] as CredentialPair[],
   concurrency: 200,
   timeout: 5,
   only_hits: true,
 });
 
+function getValidCredentials(): CredentialPair[] {
+  return form.credentials
+    .map((c) => ({ username: (c.username || '').trim(), password: c.password || '' }))
+    .filter((c) => c.username);
+}
+
+function resolveCredential(authUsername?: string): CredentialPair {
+  const list = getValidCredentials();
+  if (authUsername) {
+    const found = list.find((c) => c.username === authUsername);
+    if (found) return found;
+  }
+  return list[0];
+}
+
+function addCredential() {
+  form.credentials.push({ username: '', password: '' });
+}
+
+function removeCredential(index: number) {
+  if (form.credentials.length <= 1) return;
+  form.credentials.splice(index, 1);
+}
+
 const cameraColumns = getCameraScanColumns();
 const nvrColumns = getNvrScanColumns();
-const channelColumns = getNvrChannelColumns();
 
-const modalTitle = computed(() =>
-  state.mode === 'nvr' ? '通过网段注册 NVR' : '通过网段注册摄像头',
+function segmentScanDrawerTitle(mode: 'camera' | 'nvr') {
+  return mode === 'nvr' ? '通过网段注册 NVR' : '通过网段注册摄像头';
+}
+
+const drawerTitle = computed(() => segmentScanDrawerTitle(state.mode));
+
+const tablePagination = {
+  pageSize: 20,
+  showSizeChanger: true,
+  pageSizeOptions: ['10', '20', '50', '100'],
+  showQuickJumper: true,
+  showTotal: (total: number) => `共 ${total} 条`,
+};
+
+const [registerResultModal, { openModal: openResultModal, closeModal: closeResultModal }] = useModal();
+
+const resultTableKind = computed<'camera' | 'nvr'>(() =>
+  state.mode === 'camera' ? 'camera' : 'nvr',
 );
 
-const channelRows = computed(() => {
-  const inv = state.nvrInventory;
-  if (!inv?.channels) return [];
-  return inv.channels.map((ch) => ({
-    ...ch,
-    online_text:
-      ch.online === true ? '在线' : ch.online === false ? '离线' : '—',
-  }));
+const hasScanResult = computed(() => state.devices.length > 0);
+
+const resultHintText = computed(() => {
+  const unit = state.mode === 'nvr' ? '台 NVR' : '台摄像头';
+  return `已发现 ${state.devices.length} ${unit}，可在弹窗中分页查看并注册`;
 });
 
-const [register, { closeModal }] = useModalInner((data?: { mode?: 'camera' | 'nvr' }) => {
-  state.mode = data?.mode || props.mode || 'camera';
+const resultModalTitle = computed(() => {
+  if (state.mode === 'camera') {
+    return `扫描结果 — 摄像头（${state.devices.length}）`;
+  }
+  return `扫描结果 — NVR（${state.devices.length}）`;
+});
+
+const [register, { closeDrawer, setDrawerProps }] = useDrawerInner((data?: { mode?: 'camera' | 'nvr' }) => {
+  const mode = data?.mode || props.mode || 'camera';
+  state.mode = mode;
   state.devices = [];
-  state.nvrInventory = null;
   state.scanProgress = '';
+  setDrawerProps({ title: segmentScanDrawerTitle(mode) });
 });
 
 function vendorToCameraType(vendor?: string): string {
@@ -245,19 +308,18 @@ async function handleScan() {
     createMessage.warning('请填写扫描目标');
     return;
   }
-  if (!form.username.trim()) {
-    createMessage.warning('请填写用户名');
+  const credentials = getValidCredentials();
+  if (!credentials.length) {
+    createMessage.warning('请至少填写一组用户名');
     return;
   }
   state.scanning = true;
   state.scanProgress = '正在扫描，请稍候…';
   state.devices = [];
-  state.nvrInventory = null;
   try {
     const res = await scanSegmentDevices({
       targets: form.targets.trim(),
-      username: form.username.trim(),
-      password: form.password,
+      credentials,
       ports: form.ports.trim() || undefined,
       concurrency: form.concurrency,
       timeout: form.timeout,
@@ -271,6 +333,7 @@ async function handleScan() {
       createMessage.info(state.mode === 'nvr' ? '未发现 NVR 设备' : '未发现可识别设备');
     } else {
       createMessage.success(`扫描完成，共 ${state.devices.length} 台`);
+      openResultModal(true);
     }
   } catch (e: unknown) {
     const err = e as { msg?: string; message?: string };
@@ -281,22 +344,28 @@ async function handleScan() {
   }
 }
 
-async function handleRegisterNvrOnly(record: SegmentScanDeviceRow) {
+async function handleRegisterNvrWithChannels(record: SegmentScanDeviceRow) {
+  const cred = resolveCredential(record.auth_username);
+  const credentials = getValidCredentials();
   state.registering = true;
   try {
-    await upsertNvr({
+    const res = await registerNvrWithChannels({
       ip: record.ip,
       port: record.port || 80,
-      username: form.username.trim(),
-      password: form.password,
+      username: cred.username,
+      password: cred.password,
+      credentials,
+      timeout: form.timeout,
+      vendor: record.vendor,
       name: record.device_name,
       model: record.model,
-      vendor: record.vendor,
       serial_number: record.serial,
       rtsp_url: record.rtsp_url,
       scheme: record.port && [443, 8443].includes(record.port) ? 'https' : 'http',
     });
-    createMessage.success('NVR 已登记');
+    const stats = (res as { stats?: { registered?: number; skipped?: number } })?.stats;
+    const n = stats?.registered ?? (res as NvrInfo)?.camera_count ?? 0;
+    createMessage.success(`NVR 已登记，已挂载 ${n} 路通道`);
     emit('success');
   } catch (e: unknown) {
     const err = e as { msg?: string; message?: string };
@@ -306,40 +375,13 @@ async function handleRegisterNvrOnly(record: SegmentScanDeviceRow) {
   }
 }
 
-async function handleEnumerate(record: SegmentScanDeviceRow) {
-  state.enumerating = true;
-  try {
-    const res = await enumerateNvrChannels({
-      ip: record.ip,
-      port: record.port || 80,
-      username: form.username.trim(),
-      password: form.password,
-      timeout: form.timeout,
-      vendor: record.vendor,
-    });
-    const inv = (res as { data?: NvrInventoryResult })?.data ?? (res as NvrInventoryResult);
-    state.nvrInventory = inv;
-    if (!inv?.channels?.length) {
-      createMessage.warning(inv?.error || '未枚举到通道');
-    }
-  } catch (e: unknown) {
-    const err = e as { msg?: string; message?: string };
-    createMessage.error(err?.msg || err?.message || '枚举失败');
-  } finally {
-    state.enumerating = false;
-  }
-}
-
-function backToNvrList() {
-  state.nvrInventory = null;
-}
-
 async function handleRegisterCamera(record: SegmentScanDeviceRow) {
   const source = record.rtsp_url;
   if (!source) {
     createMessage.warning('无 RTSP 地址，请确认凭证正确或设备已识别');
     return;
   }
+  const cred = resolveCredential(record.auth_username);
   state.registering = true;
   try {
     await registerDevice({
@@ -347,8 +389,8 @@ async function handleRegisterCamera(record: SegmentScanDeviceRow) {
       source,
       ip: record.ip,
       port: 554,
-      username: form.username.trim(),
-      password: form.password,
+      username: cred.username,
+      password: cred.password,
       cameraType: vendorToCameraType(record.vendor),
       stream: 0,
       manufacturer: record.vendor_label,
@@ -365,59 +407,14 @@ async function handleRegisterCamera(record: SegmentScanDeviceRow) {
   }
 }
 
-async function handleRegisterChannel(ch: NvrChannelRow & { online_text?: string }) {
-  const inv = state.nvrInventory;
-  if (!inv) return;
-  const source = ch.rtsp_url || ch.rtsp_direct;
-  if (!source) {
-    createMessage.warning('该通道无 RTSP 地址');
-    return;
-  }
-  state.registering = true;
-  try {
-    const nvrRow = await upsertNvr({
-      ip: inv.nvr_ip,
-      port: inv.nvr_port || 80,
-      username: form.username.trim(),
-      password: form.password,
-      name: inv.nvr_device_name,
-      model: inv.nvr_model,
-      vendor: inv.nvr_vendor,
-      serial_number: inv.nvr_serial,
-      scheme: inv.nvr_port && [443, 8443].includes(inv.nvr_port) ? 'https' : 'http',
-    });
-    const nvrId = (nvrRow as { id?: number })?.id;
-    await registerDevice({
-      name: ch.name || `NVR-${inv.nvr_ip}-CH${ch.channel_id}`,
-      source,
-      ip: ch.camera_ip || inv.nvr_ip,
-      port: ch.camera_port || 554,
-      username: form.username.trim(),
-      password: form.password,
-      cameraType: vendorToCameraType(ch.vendor || inv.nvr_vendor),
-      stream: 0,
-      model: ch.model,
-      serial_number: ch.serial,
-      nvr_id: nvrId,
-      nvr_channel: ch.channel_id,
-      rtsp_direct: ch.rtsp_direct,
-      channel_online: ch.online,
-      connection_status: ch.connection_status || ch.probe_error,
-    });
-    createMessage.success('通道注册成功');
-    emit('success');
-  } catch (e: unknown) {
-    const err = e as { msg?: string; message?: string };
-    createMessage.error(err?.msg || err?.message || '注册失败');
-  } finally {
-    state.registering = false;
-  }
+function handleResultModalClose() {
+  closeResultModal();
 }
 
 function handleClose() {
+  closeResultModal();
   state.devices = [];
-  state.nvrInventory = null;
-  closeModal();
+  closeDrawer();
 }
 </script>
 
@@ -439,16 +436,36 @@ function handleClose() {
       font-size: 13px;
     }
   }
-  .result-section {
-    margin-top: 8px;
-    .result-title {
-      font-weight: 600;
+  .credentials-block {
+    .credential-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
       margin-bottom: 8px;
+      .cred-order {
+        flex: 0 0 20px;
+        text-align: center;
+        color: #999;
+        font-size: 12px;
+      }
+      .cred-user {
+        flex: 1;
+        min-width: 120px;
+      }
+      .cred-pass {
+        flex: 1;
+        min-width: 120px;
+      }
     }
-    .nvr-warn {
-      color: #fa8c16;
-      margin-bottom: 8px;
+    .cred-hint {
+      margin-top: 6px;
+      color: #999;
+      font-size: 12px;
     }
   }
+  .result-hint {
+    margin-top: 12px;
+  }
 }
+
 </style>

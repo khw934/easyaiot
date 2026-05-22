@@ -15,11 +15,25 @@ from app.vendor.hiktools.core.vendors import vendor_label
 DEFAULT_PORTS = "80,443,8000,8443"
 
 
-def _credentials(username: str | None, password: str | None) -> list[Credential]:
-    u = (username or "").strip()
-    if not u:
-        return []
-    return [Credential(u, password or "")]
+def _parse_credentials(
+    username: str | None = None,
+    password: str | None = None,
+    credentials: Sequence[dict[str, Any]] | None = None,
+) -> list[Credential]:
+    """解析凭证列表，按顺序尝试（与 hiktoolno -c 重复参数一致）。"""
+    out: list[Credential] = []
+    if credentials:
+        for item in credentials:
+            if not isinstance(item, dict):
+                continue
+            u = (item.get("username") or "").strip()
+            if u:
+                out.append(Credential(u, item.get("password") or ""))
+    if not out:
+        u = (username or "").strip()
+        if u:
+            out.append(Credential(u, password or ""))
+    return out
 
 
 def _device_row(d: Device) -> dict[str, Any]:
@@ -44,6 +58,7 @@ def _device_row(d: Device) -> dict[str, Any]:
         "source": d.source,
         "error": d.error,
         "url": d.url,
+        "auth_username": d.evidence.get("authenticated_as"),
     }
 
 
@@ -55,11 +70,16 @@ def _aggregate_by_ip(devices: Sequence[Device]) -> list[dict[str, Any]]:
     for ip, group in sorted(by_ip.items()):
         group.sort(key=lambda x: x.port)
         primary = next((d for d in group if d.is_recognized), group[0])
+        auth_username = next(
+            (d.evidence.get("authenticated_as") for d in group if d.evidence.get("authenticated_as")),
+            None,
+        )
         rows.append(
             {
                 "ip": ip,
                 "ports": [d.port for d in group],
                 "port": primary.port,
+                "auth_username": auth_username,
                 "vendor": primary.vendor,
                 "vendor_label": vendor_label(primary.vendor),
                 "device_role": primary.device_role,
@@ -84,6 +104,7 @@ async def _run_segment_scan(
     ports_spec: str = DEFAULT_PORTS,
     username: str | None = None,
     password: str | None = None,
+    credentials: Sequence[dict[str, Any]] | None = None,
     concurrency: int = 200,
     timeout: float = 5.0,
     only_hits: bool = True,
@@ -95,11 +116,11 @@ async def _run_segment_scan(
     if not targets:
         raise ValueError("解析后目标列表为空，请填写有效网段或 IP")
 
-    credentials = _credentials(username, password)
+    creds = _parse_credentials(username, password, credentials)
     devices: list[Device] = []
     async for item in scan(
         targets,
-        credentials=credentials,
+        credentials=creds,
         concurrency=concurrency,
         timeout=timeout,
         only_hits=only_hits,
@@ -124,6 +145,7 @@ def scan_segment(
     ports_spec: str = DEFAULT_PORTS,
     username: str | None = None,
     password: str | None = None,
+    credentials: Sequence[dict[str, Any]] | None = None,
     concurrency: int = 200,
     timeout: float = 5.0,
     only_hits: bool = True,
@@ -136,6 +158,7 @@ def scan_segment(
             ports_spec=ports_spec,
             username=username,
             password=password,
+            credentials=credentials,
             concurrency=concurrency,
             timeout=timeout,
             only_hits=only_hits,
@@ -151,21 +174,26 @@ async def _run_nvr_enumerate(
     *,
     username: str | None = None,
     password: str | None = None,
+    credentials: Sequence[dict[str, Any]] | None = None,
     timeout: float = 5.0,
     vendor: str | None = None,
+    probe_cameras: bool = True,
 ) -> dict[str, Any]:
-    credentials = _credentials(username, password)
-    if not credentials:
-        raise ValueError("枚举 NVR 通道需要填写用户名和密码")
+    creds = _parse_credentials(username, password, credentials)
+    if not creds:
+        raise ValueError("枚举 NVR 通道需要至少一组用户名和密码")
     inv = await inventory_nvr(
         ip.strip(),
         int(port),
-        credentials=credentials,
+        credentials=creds,
         timeout=timeout,
-        probe_cameras=True,
+        probe_cameras=probe_cameras,
         vendor=vendor,
     )
-    return inv.to_dict()
+    result = inv.to_dict()
+    if inv.auth_username:
+        result["auth_username"] = inv.auth_username
+    return result
 
 
 def enumerate_nvr_channels(
@@ -174,8 +202,10 @@ def enumerate_nvr_channels(
     *,
     username: str | None = None,
     password: str | None = None,
+    credentials: Sequence[dict[str, Any]] | None = None,
     timeout: float = 5.0,
     vendor: str | None = None,
+    probe_cameras: bool = True,
 ) -> dict[str, Any]:
     return asyncio.run(
         _run_nvr_enumerate(
@@ -183,7 +213,9 @@ def enumerate_nvr_channels(
             port,
             username=username,
             password=password,
+            credentials=credentials,
             timeout=timeout,
             vendor=vendor,
+            probe_cameras=probe_cameras,
         )
     )

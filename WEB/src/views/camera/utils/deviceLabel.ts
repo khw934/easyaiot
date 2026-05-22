@@ -54,12 +54,28 @@ export function getGb28181PlayIds(
   return { sipDeviceId, channelId };
 }
 
-export function isNvrChannelDevice(device: {
-  nvr_id?: number | null;
-  device_kind?: string;
-}): boolean {
+/** 海康/大华经 NVR 取流的 RTSP 路径特征 */
+export function isNvrRtspSource(source?: string | null): boolean {
+  const s = (source || '').trim().toLowerCase();
+  if (!s.startsWith('rtsp://')) return false;
+  return s.includes('/streaming/channels/') || s.includes('cam/realmonitor');
+}
+
+export function isNvrChannelDevice(
+  device: {
+    nvr_id?: number | null;
+    device_kind?: string;
+    source?: string | null;
+  },
+  nvrs?: Array<{ id?: number; ip?: string }>,
+): boolean {
   if (device.device_kind === 'nvr_channel') return true;
-  return !!(device.nvr_id && device.nvr_id > 0);
+  if (device.nvr_id && device.nvr_id > 0) return true;
+  if (!isNvrRtspSource(device.source)) return false;
+  if (!nvrs?.length) return true;
+  const host = (device.source || '').trim().match(/^rtsp:\/\/(?:[^@/]+@)?([^/:]+)/i)?.[1];
+  if (!host) return false;
+  return nvrs.some((n) => (n.ip || '').trim() === host);
 }
 
 export function isNvrListRow(record: {

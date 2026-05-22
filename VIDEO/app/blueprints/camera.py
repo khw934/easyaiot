@@ -660,6 +660,9 @@ def register_device_by_onvif():
         
         ip = data.get('ip', '').strip()
         port = data.get('port', 80)
+        username = data.get('username')
+        if username is not None:
+            username = str(username).strip()
         password = data.get('password', '').strip()
         
         if not ip:
@@ -672,7 +675,7 @@ def register_device_by_onvif():
         except (ValueError, TypeError):
             return jsonify({'code': 400, 'msg': '摄像头端口必须是数字'}), 400
         
-        device_id = register_camera_by_onvif(ip, port, password)
+        device_id = register_camera_by_onvif(ip, port, password, username=username or None)
         return jsonify({
             'code': 0,
             'msg': '设备注册成功',
@@ -1245,6 +1248,93 @@ def upsert_nvr_device():
         return jsonify({'code': 500, 'msg': f'保存 NVR 失败: {e}'}), 500
 
 
+@camera_bp.route('/nvr/register-channels', methods=['POST'])
+def register_nvr_channels_device():
+    """登记 NVR 并批量挂载枚举到的通道；未传 channels 时服务端自动枚举。"""
+    try:
+        from app.services.hik_scan_service import enumerate_nvr_channels
+        from app.services.nvr_service import bulk_register_nvr_channels
+
+        data = request.get_json() or {}
+        ip = (data.get('ip') or '').strip()
+        if not ip:
+            return jsonify({'code': 400, 'msg': 'NVR IP 不能为空'}), 400
+        try:
+            port = int(data.get('port') or 80)
+        except (TypeError, ValueError):
+            return jsonify({'code': 400, 'msg': '端口必须是数字'}), 400
+
+        username = (data.get('username') or '').strip() or None
+        password = data.get('password')
+        credentials = data.get('credentials')
+        if credentials is not None and not isinstance(credentials, list):
+            return jsonify({'code': 400, 'msg': 'credentials 须为数组'}), 400
+
+        channels = data.get('channels')
+        if channels is None:
+            if not credentials and not username:
+                return jsonify({'code': 400, 'msg': '请至少填写一组用户名和密码'}), 400
+            timeout = float(data.get('timeout') or 5.0)
+            vendor = (data.get('vendor') or '').strip() or None
+            inv = enumerate_nvr_channels(
+                ip,
+                port,
+                username=username,
+                password=password,
+                credentials=credentials,
+                timeout=timeout,
+                vendor=vendor,
+                probe_cameras=False,
+            )
+            channels = inv.get('channels') or []
+            if inv.get('auth_username') and not username:
+                username = inv.get('auth_username')
+            if not data.get('name') and inv.get('nvr_device_name'):
+                data['name'] = inv.get('nvr_device_name')
+            if not data.get('model') and inv.get('nvr_model'):
+                data['model'] = inv.get('nvr_model')
+            if not data.get('vendor') and inv.get('nvr_vendor'):
+                data['vendor'] = inv.get('nvr_vendor')
+            if not data.get('serial_number') and inv.get('nvr_serial'):
+                data['serial_number'] = inv.get('nvr_serial')
+        elif not isinstance(channels, list):
+            return jsonify({'code': 400, 'msg': 'channels 须为数组'}), 400
+
+        row = bulk_register_nvr_channels(
+            data,
+            channels,
+            username=username or '',
+            password=password or '',
+            vendor=(data.get('vendor') or '').strip() or None,
+        )
+        stats = row.pop('register_stats', {})
+        msg = f"已挂载 {stats.get('registered', 0)} 路通道"
+        if stats.get('skipped'):
+            msg += f"，跳过 {stats['skipped']} 路（无 RTSP）"
+        if stats.get('errors'):
+            msg += f"，{len(stats['errors'])} 路失败"
+        return jsonify({'code': 0, 'msg': msg, 'data': row, 'stats': stats})
+    except ValueError as e:
+        return jsonify({'code': 400, 'msg': str(e)}), 400
+    except Exception as e:
+        logger.error(f'NVR 通道批量注册失败: {e}', exc_info=True)
+        return jsonify({'code': 500, 'msg': f'NVR 通道批量注册失败: {e}'}), 500
+
+
+@camera_bp.route('/nvr/<int:nvr_id>', methods=['DELETE'])
+def delete_nvr_device(nvr_id: int):
+    """删除 NVR 记录。"""
+    try:
+        from app.services.nvr_service import delete_nvr
+        delete_nvr(nvr_id)
+        return jsonify({'code': 0, 'msg': 'success'})
+    except ValueError as e:
+        return jsonify({'code': 404, 'msg': str(e)}), 404
+    except Exception as e:
+        logger.error(f'删除 NVR 失败: {e}', exc_info=True)
+        return jsonify({'code': 500, 'msg': f'删除 NVR 失败: {e}'}), 500
+
+
 # ------------------------- 网段扫描（hiktools） -------------------------
 @camera_bp.route('/scan/segment', methods=['POST'])
 def scan_segment_devices():
@@ -1259,6 +1349,9 @@ def scan_segment_devices():
 
         username = (data.get('username') or '').strip() or None
         password = data.get('password')
+        credentials = data.get('credentials')
+        if credentials is not None and not isinstance(credentials, list):
+            return jsonify({'code': 400, 'msg': 'credentials 须为数组'}), 400
         ports = (data.get('ports') or '80,443,8000,8443').strip()
         concurrency = int(data.get('concurrency') or 200)
         timeout = float(data.get('timeout') or 5.0)
@@ -1274,6 +1367,7 @@ def scan_segment_devices():
             ports_spec=ports,
             username=username,
             password=password,
+            credentials=credentials,
             concurrency=concurrency,
             timeout=timeout,
             only_hits=only_hits,
@@ -1303,21 +1397,27 @@ def scan_nvr_channels():
         except (TypeError, ValueError):
             return jsonify({'code': 400, 'msg': '端口必须是数字'}), 400
 
-        username = (data.get('username') or '').strip()
-        password = data.get('password') or ''
-        if not username:
-            return jsonify({'code': 400, 'msg': '用户名不能为空'}), 400
+        username = (data.get('username') or '').strip() or None
+        password = data.get('password')
+        credentials = data.get('credentials')
+        if credentials is not None and not isinstance(credentials, list):
+            return jsonify({'code': 400, 'msg': 'credentials 须为数组'}), 400
+        if not credentials and not username:
+            return jsonify({'code': 400, 'msg': '请至少填写一组用户名和密码'}), 400
 
         timeout = float(data.get('timeout') or 5.0)
         vendor = (data.get('vendor') or '').strip() or None
+        probe_cameras = bool(data.get('probe_cameras', False))
 
         inv = enumerate_nvr_channels(
             ip,
             port,
             username=username,
             password=password,
+            credentials=credentials,
             timeout=timeout,
             vendor=vendor,
+            probe_cameras=probe_cameras,
         )
         return jsonify({'code': 0, 'msg': 'success', 'data': inv})
     except ValueError as e:
@@ -2108,12 +2208,30 @@ def on_dvr_callback():
 def list_directories():
     """查询目录列表（树形结构）"""
     try:
-        from app.services.gb28181_sync_service import ensure_directory_layout
+        from app.services.gb28181_sync_service import (
+            ensure_directory_layout,
+            sync_gb28181_channels_to_devices,
+        )
+        from sqlalchemy import func
+
         ensure_directory_layout()
+        try:
+            sync_gb28181_channels_to_devices(strict=False)
+        except Exception as e:
+            logger.warning(f'目录列表加载前国标同步失败: {e}')
+
+        count_rows = (
+            db.session.query(Device.directory_id, func.count(Device.id))
+            .group_by(Device.directory_id)
+            .all()
+        )
+        device_count_by_dir = {dir_id: cnt for dir_id, cnt in count_rows if dir_id is not None}
 
         def build_tree(parent_id=None):
             """递归构建目录树"""
-            directories = DeviceDirectory.query.filter_by(parent_id=parent_id).order_by(DeviceDirectory.sort_order, DeviceDirectory.id).all()
+            directories = DeviceDirectory.query.filter_by(parent_id=parent_id).order_by(
+                DeviceDirectory.sort_order, DeviceDirectory.id
+            ).all()
             result = []
             for directory in directories:
                 directory_dict = {
@@ -2123,14 +2241,14 @@ def list_directories():
                     'description': directory.description,
                     'sort_order': directory.sort_order,
                     'is_default': camera_service.is_default_directory(directory),
-                    'device_count': Device.query.filter_by(directory_id=directory.id).count(),
+                    'device_count': device_count_by_dir.get(directory.id, 0),
                     'created_at': directory.created_at.isoformat() if directory.created_at else None,
                     'updated_at': directory.updated_at.isoformat() if directory.updated_at else None,
-                    'children': build_tree(directory.id)
+                    'children': build_tree(directory.id),
                 }
                 result.append(directory_dict)
             return result
-        
+
         tree = build_tree()
         return jsonify({
             'code': 0,
@@ -2142,11 +2260,28 @@ def list_directories():
         return jsonify({'code': 500, 'msg': f'查询目录列表失败: {str(e)}'}), 500
 
 
-def _device_monitor_tree_node(device):
+def _device_monitor_tree_node(device, nvr_by_ip=None):
     """分屏监控树中的设备节点（仅含播放与展示所需字段）。"""
+    from app.services.nvr_service import infer_nvr_link_from_source
+
     d = _to_dict(device)
     source = (d.get('source') or '').strip()
     is_gb28181 = source.lower().startswith('gb28181://')
+    device_kind = d.get('device_kind') or ('gb28181' if is_gb28181 else 'direct')
+    nvr_id = d.get('nvr_id')
+    nvr_channel = int(d.get('nvr_channel') or 0)
+    nvr = d.get('nvr') if isinstance(d.get('nvr'), dict) else None
+    if not nvr_id and nvr and nvr.get('id'):
+        nvr_id = nvr.get('id')
+    if not nvr_id and not is_gb28181 and source:
+        inferred_id, inferred_ch = infer_nvr_link_from_source(source, nvr_by_ip=nvr_by_ip)
+        if inferred_id:
+            nvr_id = inferred_id
+            if not nvr_channel and inferred_ch:
+                nvr_channel = inferred_ch
+            device_kind = 'nvr_channel'
+    elif device_kind == 'direct' and nvr_id:
+        device_kind = 'nvr_channel'
     return {
         'type': 'device',
         'id': d['id'],
@@ -2157,8 +2292,11 @@ def _device_monitor_tree_node(device):
         'ai_rtmp_stream': d.get('ai_rtmp_stream'),
         'online': d.get('online'),
         'directory_id': d.get('directory_id'),
-        'device_kind': 'gb28181' if is_gb28181 else 'direct',
+        'device_kind': device_kind,
         'source': source or None,
+        'nvr_id': nvr_id,
+        'nvr_channel': nvr_channel,
+        'nvr_label': d.get('nvr_label'),
     }
 
 
@@ -2166,8 +2304,18 @@ def _device_monitor_tree_node(device):
 def get_directory_monitor_tree():
     """分屏监控用目录设备树：目录嵌套 + 各目录下设备（未分组设备已归入默认分组）。"""
     try:
-        from app.services.gb28181_sync_service import ensure_directory_layout
+        from app.services.gb28181_sync_service import (
+            ensure_directory_layout,
+            sync_gb28181_channels_to_devices,
+        )
+        from app.services.nvr_service import build_nvr_ip_index
+
         ensure_directory_layout()
+        try:
+            sync_gb28181_channels_to_devices(strict=False)
+        except Exception as e:
+            logger.warning(f'分屏监控树加载前国标同步失败: {e}')
+        nvr_by_ip = build_nvr_ip_index()
 
         def build_tree(parent_id=None):
             directories = DeviceDirectory.query.filter_by(parent_id=parent_id).order_by(
@@ -2187,7 +2335,7 @@ def get_directory_monitor_tree():
                     'is_default': camera_service.is_default_directory(directory),
                     'device_count': len(devices),
                     'children': build_tree(directory.id),
-                    'devices': [_device_monitor_tree_node(d) for d in devices],
+                    'devices': [_device_monitor_tree_node(d, nvr_by_ip) for d in devices],
                 })
             return result
 
@@ -2261,21 +2409,46 @@ def sync_gb28181_directory_devices():
         from app.services.gb28181_sync_service import (
             Gb28181SyncError,
             backfill_gb28181_ai_stream_urls,
+            sync_gb28181_channels_from_payload,
             sync_gb28181_channels_to_devices,
         )
 
-        created = sync_gb28181_channels_to_devices(strict=True)
+        body = request.get_json(silent=True) or {}
+        if isinstance(body, dict) and isinstance(body.get('data'), dict):
+            inner = body['data']
+            if 'channels' in inner:
+                body = inner
+        payload_channels = body.get('channels') if isinstance(body, dict) else None
+        if isinstance(payload_channels, list) and len(payload_channels) > 0:
+            stats = sync_gb28181_channels_from_payload(payload_channels, strict=True)
+        else:
+            stats = sync_gb28181_channels_to_devices(strict=True)
+        created = int(stats.get('created') or 0)
         try:
             backfill_gb28181_ai_stream_urls()
         except Exception as e:
             logger.warning(f'国标设备 AI 推流地址回填异常: {e}')
         total_gb = Device.query.filter(Device.source.ilike('gb28181://%')).count()
+        wvp_count = int(stats.get('wvp_device_count') or 0)
+        channels_seen = int(stats.get('channels_seen') or 0)
+        msg = '国标设备同步成功'
+        if wvp_count > 0 and total_gb == 0:
+            msg = (
+                f'WVP 发现 {wvp_count} 个国标设备、解析 {channels_seen} 个通道，'
+                '但未写入设备库，请检查 VIDEO 日志与数据库'
+            )
+        elif wvp_count == 0:
+            msg = '未从 WVP 拉取到国标设备，请检查 GATEWAY_URL / GB28181_SERVICE_URL 与 WVP 服务'
         return jsonify({
             'code': 0,
-            'msg': '国标设备同步成功',
+            'msg': msg,
             'data': {
                 'created': created,
                 'total_gb_devices': total_gb,
+                'wvp_device_count': wvp_count,
+                'channels_seen': channels_seen,
+                'api_base': stats.get('api_base'),
+                'upsert_errors': stats.get('upsert_errors') or [],
             },
         })
     except Gb28181SyncError as e:
@@ -2450,7 +2623,15 @@ def list_directory_devices(directory_id):
         directory = DeviceDirectory.query.get(directory_id)
         if not directory:
             return jsonify({'code': 400, 'msg': f'目录不存在: ID={directory_id}'}), 400
-        
+
+        if camera_service.is_default_directory(directory):
+            from app.services.gb28181_sync_service import sync_gb28181_channels_to_devices
+
+            try:
+                sync_gb28181_channels_to_devices(strict=False)
+            except Exception as e:
+                logger.warning(f'默认分组设备列表加载前国标同步失败: {e}')
+
         # 获取请求参数
         page_no = int(request.args.get('pageNo', 1))
         page_size = int(request.args.get('pageSize', 10))

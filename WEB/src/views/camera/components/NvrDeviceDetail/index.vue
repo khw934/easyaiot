@@ -3,57 +3,42 @@
     <PageHeader
       class="nvr-detail-header"
       :title="title || `NVR ${nvrId}`"
-      sub-title="点击下方摄像头进行管理或播放"
+      sub-title="点击下方摄像头卡片进行管理或播放"
       @back="emit('back')"
     />
     <Spin :spinning="loading">
-      <div v-if="nvrInfo" class="nvr-summary">
-        <Descriptions :column="3" size="small" bordered>
-          <DescriptionsItem label="IP">{{ nvrInfo.ip }}:{{ nvrInfo.port }}</DescriptionsItem>
-          <DescriptionsItem label="品牌">{{ nvrInfo.vendor_label || nvrInfo.vendor || '—' }}</DescriptionsItem>
-          <DescriptionsItem label="型号">{{ nvrInfo.model || '—' }}</DescriptionsItem>
-          <DescriptionsItem label="序列号">{{ nvrInfo.serial_number || '—' }}</DescriptionsItem>
-          <DescriptionsItem label="固件">{{ nvrInfo.firmware_version || '—' }}</DescriptionsItem>
-          <DescriptionsItem label="MAC">{{ nvrInfo.mac || '—' }}</DescriptionsItem>
-          <DescriptionsItem label="Web" :span="3">
-            <a v-if="nvrInfo.web_url" :href="nvrInfo.web_url" target="_blank" rel="noopener">{{ nvrInfo.web_url }}</a>
-            <span v-else>—</span>
-          </DescriptionsItem>
-          <DescriptionsItem label="RTSP(经NVR)" :span="3">
-            <span class="rtsp-line">{{ nvrInfo.rtsp_url || '—' }}</span>
-            <a-button v-if="nvrInfo.rtsp_url" type="link" size="small" @click="copyRtsp(nvrInfo.rtsp_url!)">复制</a-button>
-          </DescriptionsItem>
-        </Descriptions>
-      </div>
       <div class="channel-section">
-        <div class="section-title">挂载摄像头（{{ cameras.length }}）</div>
-        <Empty v-if="!cameras.length" description="暂无挂载摄像头，可通过网段扫描 NVR 注册通道" />
+        <div class="section-header">
+          <span class="section-title">挂载摄像头（{{ cameras.length }}）</span>
+          <a-button
+            type="primary"
+            size="small"
+            :loading="syncing"
+            :disabled="!nvrInfo"
+            @click="handleSyncChannels"
+          >
+            同步通道
+          </a-button>
+        </div>
+        <Empty v-if="!cameras.length" description="暂无挂载摄像头，可通过网段扫描 NVR 登记并同步通道" />
         <List
           v-else
-          :grid="{ gutter: 12, xs: 1, sm: 2, md: 3, lg: 3, xl: 4 }"
+          :grid="{ gutter: 12, xs: 1, sm: 2, md: 3, lg: 5, xl: 5, xxl: 5 }"
           :data-source="cameras"
+          :pagination="paginationProp"
         >
           <template #renderItem="{ item }">
-            <ListItem>
-              <Card size="small" :title="formatCameraDeviceLabel(item)">
-                <p>通道：{{ item.nvr_channel }}</p>
-                <p>IP：{{ item.ip || '—' }}</p>
-                <p class="ellipsis" :title="item.source">RTSP(经NVR)：{{ item.rtsp_url || item.source || '—' }}</p>
-                <p v-if="item.rtsp_direct" class="ellipsis" :title="item.rtsp_direct">RTSP(直连)：{{ item.rtsp_direct }}</p>
-                <p>状态：{{ item.online_text || (item.online ? '在线' : item.online === false ? '离线' : '—') }}</p>
-                <template #actions>
-                  <a-button type="link" size="small" @click="emit('view', item)">查看</a-button>
-                  <a-button type="link" size="small" @click="emit('edit', item)">编辑</a-button>
-                  <a-button
-                    v-if="hasDirectPlayStream(item)"
-                    type="link"
-                    size="small"
-                    @click="emit('play', item)"
-                  >
-                    播放
-                  </a-button>
-                </template>
-              </Card>
+            <ListItem class="nvr-channel-list-item">
+              <NvrChannelCard
+                :item="item"
+                :stream-status="getStreamStatus(item.id)"
+                @view="emit('view', $event)"
+                @edit="emit('edit', $event)"
+                @play="emit('play', $event)"
+                @playAI="emit('playAI', $event)"
+                @toggleStream="emit('toggleStream', $event)"
+                @delete="emit('delete', $event)"
+              />
             </ListItem>
           </template>
         </List>
@@ -63,13 +48,10 @@
 </template>
 
 <script lang="ts" setup>
-import { onMounted, ref, watch } from 'vue';
-import { Card, Descriptions, DescriptionsItem, Empty, List, PageHeader, Spin } from 'ant-design-vue';
-import { getNvrDetail } from '@/api/device/camera';
-import type { DeviceInfo, NvrInfo } from '@/api/device/camera';
-import { formatCameraDeviceLabel } from '@/views/camera/utils/deviceLabel';
-import { hasDirectPlayStream } from '@/views/camera/utils/devicePlay';
-import { copyText } from '@/utils/copyTextToClipboard';
+import { computed, onMounted, ref, watch } from 'vue';
+import { Empty, List, PageHeader, Spin } from 'ant-design-vue';
+import { getNvrDetail, registerNvrWithChannels, type DeviceInfo, type NvrInfo } from '@/api/device/camera';
+import NvrChannelCard from '@/views/camera/components/NvrChannelCard/index.vue';
 import { useMessage } from '@/hooks/web/useMessage';
 
 const ListItem = List.Item;
@@ -77,6 +59,8 @@ const ListItem = List.Item;
 const props = defineProps<{
   nvrId: number;
   title?: string;
+  /** 与设备列表页共用的 RTSP 转发状态表 */
+  deviceStreamStatuses?: Record<string, string>;
 }>();
 
 const emit = defineEmits<{
@@ -84,12 +68,53 @@ const emit = defineEmits<{
   view: [device: DeviceInfo];
   edit: [device: DeviceInfo];
   play: [device: DeviceInfo];
+  playAI: [device: DeviceInfo];
+  toggleStream: [device: DeviceInfo];
+  delete: [device: DeviceInfo];
 }>();
 
 const { createMessage } = useMessage();
 const loading = ref(false);
+const syncing = ref(false);
 const nvrInfo = ref<NvrInfo | null>(null);
 const cameras = ref<Array<DeviceInfo & { online_text?: string; rtsp_url?: string }>>([]);
+
+const page = ref(1);
+const pageSize = ref(10);
+
+const paginationProp = computed(() => ({
+  showSizeChanger: true,
+  showQuickJumper: true,
+  pageSize: pageSize.value,
+  current: page.value,
+  total: cameras.value.length,
+  showTotal: (total: number) => `共 ${total} 路`,
+  onChange: (p: number, pz: number) => {
+    page.value = p;
+    pageSize.value = pz;
+  },
+}));
+
+function mapCameras(data: NvrInfo | null) {
+  return (data?.cameras || []).map((c) => ({
+    ...c,
+    id: c.id,
+    name: c.name || '',
+    source: c.source || c.rtsp_url || '',
+    rtmp_stream: c.rtmp_stream,
+    http_stream: c.http_stream,
+    ai_rtmp_stream: c.ai_rtmp_stream,
+    ai_http_stream: c.ai_http_stream,
+    device_kind: 'nvr_channel',
+    nvr_id: props.nvrId,
+    nvr_channel: c.nvr_channel,
+    channel_online: c.online,
+  })) as DeviceInfo[];
+}
+
+function getStreamStatus(deviceId: string) {
+  return props.deviceStreamStatuses?.[deviceId] || 'unknown';
+}
 
 async function load() {
   loading.value = true;
@@ -97,15 +122,7 @@ async function load() {
     const res = await getNvrDetail(props.nvrId, true);
     const data = (res as NvrInfo) || (res as { data?: NvrInfo })?.data;
     nvrInfo.value = data || null;
-    cameras.value = (data?.cameras || []).map((c) => ({
-      ...c,
-      id: c.id,
-      name: c.name || '',
-      source: c.source || c.rtsp_url || '',
-      device_kind: 'nvr_channel',
-      nvr_id: props.nvrId,
-      nvr_channel: c.nvr_channel,
-    })) as DeviceInfo[];
+    cameras.value = mapCameras(data || null);
   } catch (e) {
     console.error(e);
     createMessage.error('加载 NVR 详情失败');
@@ -114,12 +131,47 @@ async function load() {
   }
 }
 
-function copyRtsp(url: string) {
-  copyText(url, '已复制 RTSP');
+async function handleSyncChannels() {
+  const nvr = nvrInfo.value;
+  if (!nvr?.ip) {
+    createMessage.warning('NVR 信息不完整');
+    return;
+  }
+  if (!nvr.username) {
+    createMessage.warning('请先在 NVR 编辑中填写 Web 登录用户名与密码');
+    return;
+  }
+  syncing.value = true;
+  try {
+    const res = await registerNvrWithChannels({
+      ip: nvr.ip,
+      port: nvr.port ?? 80,
+      username: nvr.username,
+      password: nvr.password,
+      vendor: nvr.vendor,
+      name: nvr.name,
+      model: nvr.model,
+      serial_number: nvr.serial_number,
+      scheme: nvr.scheme,
+    });
+    const data = (res as NvrInfo) || (res as { data?: NvrInfo })?.data;
+    const stats = (res as { stats?: { registered?: number; skipped?: number } })?.stats;
+    nvrInfo.value = data || nvr;
+    cameras.value = mapCameras(data || null);
+    const n = stats?.registered ?? cameras.value.length;
+    createMessage.success(`已同步 ${n} 路通道`);
+  } catch (e: unknown) {
+    const err = e as { msg?: string; message?: string };
+    createMessage.error(err?.msg || err?.message || '同步通道失败');
+  } finally {
+    syncing.value = false;
+  }
 }
 
 onMounted(load);
 watch(() => props.nvrId, load);
+
+defineExpose({ load });
 </script>
 
 <style lang="less" scoped>
@@ -135,35 +187,33 @@ watch(() => props.nvrId, load);
     padding: 8px 16px;
   }
 
-  .nvr-summary {
-    background: #fff;
-    padding: 16px;
-    margin-bottom: 12px;
-    border-radius: 8px;
-  }
-
   .channel-section {
     background: #fff;
     padding: 16px;
     border-radius: 8px;
     flex: 1;
 
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+
     .section-title {
       font-weight: 600;
-      margin-bottom: 12px;
+      font-size: 16px;
     }
   }
 
-  .rtsp-line {
-    word-break: break-all;
-    margin-right: 8px;
+  :deep(.ant-list) {
+    padding: 6px;
   }
 
-  .ellipsis {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    margin-bottom: 4px;
+  :deep(.ant-list-item) {
+    margin: 6px;
+    padding: 0;
   }
+
 }
 </style>

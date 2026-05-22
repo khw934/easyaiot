@@ -81,6 +81,10 @@ export interface NvrInfo {
     nvr_channel?: number;
     source?: string;
     rtsp_url?: string;
+    rtmp_stream?: string;
+    http_stream?: string;
+    ai_rtmp_stream?: string;
+    ai_http_stream?: string;
     rtsp_direct?: string;
     model?: string;
     serial?: string;
@@ -136,6 +140,37 @@ export const upsertNvr = (data: NvrInfo) => {
   return commonApi('post', `${CAMERA_PREFIX}/nvr/upsert`, data);
 };
 
+/** 登记 NVR 并批量挂载通道；未传 channels 时由服务端枚举 */
+export const registerNvrWithChannels = (data: {
+  ip: string;
+  port?: number;
+  username?: string;
+  password?: string;
+  credentials?: CredentialPair[];
+  timeout?: number;
+  vendor?: string;
+  name?: string;
+  model?: string;
+  serial_number?: string;
+  rtsp_url?: string;
+  scheme?: string;
+  channels?: NvrChannelRow[];
+}) => {
+  defHttp.setHeader({ 'X-Authorization': 'Bearer ' + localStorage.getItem('jwt_token') });
+  return defHttp.post(
+    {
+      url: `${CAMERA_PREFIX}/nvr/register-channels`,
+      data,
+      timeout: 300 * 1000,
+    },
+    { isTransformResponse: true },
+  );
+};
+
+export const deleteNvr = (nvrId: number) => {
+  return commonApi('delete', `${CAMERA_PREFIX}/nvr/${nvrId}`);
+};
+
 /**
  * 通过ONVIF搜索并自动注册摄像头
  * @param data 包含IP、端口、密码的对象
@@ -144,6 +179,7 @@ export const upsertNvr = (data: NvrInfo) => {
 export const registerDeviceByOnvif = (data: {
   ip: string;
   port: number;
+  username?: string;
   password: string;
 }) => {
   return commonApi('post', `${CAMERA_PREFIX}/register/device/onvif`, data);
@@ -263,17 +299,27 @@ export const refreshDevices = () => {
   return commonApi('post', `${CAMERA_PREFIX}/refresh`);
 };
 
+/** Web 登录凭证（按顺序尝试，与 hiktoolno -c user:pass 一致） */
+export interface CredentialPair {
+  username: string;
+  password?: string;
+}
+
 /** 网段扫描设备（hiktools HTTP 指纹） */
 export interface SegmentScanParams {
   targets: string;
+  /** @deprecated 请使用 credentials；保留兼容，取第一组 */
   username?: string;
   password?: string;
+  /** 多组凭证，从上到下按顺序尝试 */
+  credentials?: CredentialPair[];
   ports?: string;
   concurrency?: number;
   timeout?: number;
   only_hits?: boolean;
   /** true 时仅返回识别为 NVR 的设备 */
   nvr_only?: boolean;
+  exclude_nvr?: boolean;
 }
 
 export interface SegmentScanDeviceRow {
@@ -292,6 +338,8 @@ export interface SegmentScanDeviceRow {
   device_name?: string;
   mac?: string;
   rtsp_url?: string;
+  /** 扫描时认证成功的用户名 */
+  auth_username?: string;
   devices?: SegmentScanDeviceRow[];
 }
 
@@ -329,6 +377,8 @@ export interface NvrInventoryResult {
   nvr_model?: string;
   nvr_serial?: string;
   nvr_device_name?: string;
+  /** 枚举时认证成功的用户名 */
+  auth_username?: string;
   channels: NvrChannelRow[];
   error?: string;
 }
@@ -336,10 +386,13 @@ export interface NvrInventoryResult {
 export const enumerateNvrChannels = (data: {
   ip: string;
   port: number;
-  username: string;
-  password: string;
+  username?: string;
+  password?: string;
+  credentials?: CredentialPair[];
   timeout?: number;
   vendor?: string;
+  /** 是否逐台探测 IPC（登记 NVR 时建议 false，仅拉 ISAPI 通道列表） */
+  probe_cameras?: boolean;
 }) => {
   defHttp.setHeader({ 'X-Authorization': 'Bearer ' + localStorage.getItem('jwt_token') });
   return defHttp.post(
@@ -460,8 +513,11 @@ export interface MonitorTreeDeviceNode {
   ai_rtmp_stream?: string;
   online?: boolean;
   directory_id?: number | null;
-  device_kind?: 'direct' | 'gb28181';
+  device_kind?: 'direct' | 'gb28181' | 'nvr_channel' | string;
   source?: string | null;
+  nvr_id?: number | null;
+  nvr_channel?: number;
+  nvr_label?: string | null;
 }
 
 /** 分屏监控树 - 目录节点 */
@@ -531,15 +587,48 @@ export interface SyncGb28181DevicesResult {
   total_gb_devices: number;
 }
 
+/** 前端经 dev-api/gb28181 拉取后提交给 VIDEO 入库的通道项 */
+export interface Gb28181ChannelSyncItem {
+  sipDeviceId: string;
+  channelId: string;
+  name?: string;
+}
+
+export interface Gb28181SyncResult {
+  created?: number;
+  total_gb_devices?: number;
+  wvp_device_count?: number;
+  channels_seen?: number;
+  api_base?: string;
+  upsert_errors?: string[];
+}
+
+/** 解析 VIDEO 接口在 isTransformResponse:false 时的 { code, data } 信封 */
+function unwrapVideoApiData<T>(res: unknown): T {
+  const body = (res as { data?: unknown })?.data ?? res;
+  if (body && typeof body === 'object' && body !== null && 'code' in body && 'data' in body) {
+    return (body as { data: T }).data;
+  }
+  return body as T;
+}
+
 /**
- * 从 WVP 手动同步国标通道到设备目录（默认分组）
+ * 从 WVP 同步国标通道到设备目录（默认分组）。
+ * 传入 channels 时由前端经 dev-api/gb28181 拉取后提交；否则由 VIDEO 直连 WVP。
  */
-export const syncGb28181Devices = () => {
+export const syncGb28181Devices = async (
+  channels?: Gb28181ChannelSyncItem[],
+): Promise<Gb28181SyncResult> => {
   defHttp.setHeader({ 'X-Authorization': 'Bearer ' + localStorage.getItem('jwt_token') });
-  return defHttp.post(
-    { url: `${CAMERA_PREFIX}/directory/sync-gb28181`, timeout: 120 * 1000 },
-    { isTransformResponse: false },
+  const res = await defHttp.post(
+    {
+      url: `${CAMERA_PREFIX}/directory/sync-gb28181`,
+      data: channels?.length ? { channels } : {},
+      timeout: 120 * 1000,
+    },
+    { isTransformResponse: false, successMessageMode: 'none' },
   );
+  return unwrapVideoApiData<Gb28181SyncResult>(res);
 };
 
 /** 校验设备目录 JSON（摄像头不可重复等） */

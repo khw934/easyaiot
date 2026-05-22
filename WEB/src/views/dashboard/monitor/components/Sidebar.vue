@@ -57,23 +57,24 @@
           </span>
         </div>
       </div>
-      <!-- 设备树 -->
+      <!-- 设备树（与分屏监控一致：搜索框固定，树列表区域滚动） -->
       <div class="sidebar-tree">
-        <BasicTree
-          class="sidebar-device-tree"
-          :tree-data="treeData"
-          :expanded-keys="expandedKeys"
-          :selected-keys="selectedKeys"
-          :loading="loading"
-          search
-          :showIcon="true"
-          :indent="12"
-          :click-row-to-expand="false"
-          :load-data="onLoadGbDeviceChannels"
-          tree-wrapper-class-name="sidebar-tree-wrapper"
-          @update:expanded-keys="handleExpandedKeysChange"
-          @select="handleTreeSelect"
-        />
+        <div class="sidebar-tree-scroll">
+          <BasicTree
+            class="sidebar-device-tree"
+            :tree-data="treeData"
+            :expanded-keys="expandedKeys"
+            :selected-keys="selectedKeys"
+            :loading="loading"
+            search
+            :showIcon="true"
+            :indent="12"
+            :click-row-to-expand="false"
+            :load-data="onLoadGbDeviceChannels"
+            @update:expanded-keys="handleExpandedKeysChange"
+            @select="handleTreeSelect"
+          />
+        </div>
       </div>
     </div>
   </div>
@@ -97,7 +98,9 @@ import {
   findMonitorTreeNodeByKey,
 } from '@/views/camera/utils/monitorDeviceTree'
 import { buildWvpChannelTreeNodes, parseGbChannelKey, type GbChannelRef } from '@/views/camera/utils/gb28181Tree'
-import { getDeviceChannels, queryVideoList } from '@/api/device/gb28181'
+import { getDeviceChannels, queryAllVideoList } from '@/api/device/gb28181'
+import { fetchNvrListBrief } from '@/views/camera/utils/nvrDeviceGroup'
+import { buildMonitorTreeOptionsFromNvrList } from '@/views/camera/utils/monitorDeviceTree'
 import {
   buildGbSipNameMap,
   enrichWvpChannelTreeNodes,
@@ -172,16 +175,22 @@ const onLoadGbDeviceChannels: TreeProps['loadData'] = (treeNode) => {
 const loadTreeData = async () => {
   try {
     loading.value = true
-    const [res, gbRes] = await Promise.all([
+    const [res, gbRes, nvrs] = await Promise.all([
       getDirectoryMonitorTree(),
-      queryVideoList({ page: 1, count: 10000 }),
+      queryAllVideoList(),
+      fetchNvrListBrief(),
     ])
     const payload = res?.code !== undefined ? res.data : res
     const tree = payload?.tree ?? []
-    const sipNameMap = buildGbSipNameMap(gbRes?.data ?? [])
+    const wvpDevices = gbRes?.data ?? []
+    const sipNameMap = buildGbSipNameMap(wvpDevices)
+    const { nvrNameMap, nvrs: nvrList } = buildMonitorTreeOptionsFromNvrList(nvrs)
     treeData.value = buildMonitorDirectoryTreeNodes(tree, {
       showDeviceCountInTitle: false,
       sipNameMap,
+      nvrNameMap,
+      nvrs: nvrList,
+      wvpDevices,
     })
     expandedKeys.value = collectMonitorTreeExpandedKeys(treeData.value)
   } catch (error) {
@@ -253,6 +262,10 @@ const handleTreeSelect = (keys: string[], _info?: unknown) => {
 
   if (selectedKey.startsWith('gb_dev_')) {
     createMessage.info('请展开国标设备并选择具体通道')
+    return
+  }
+  if (selectedKey.startsWith('nvr_')) {
+    createMessage.info('请展开 NVR 并选择具体通道')
     return
   }
   if (selectedKey.startsWith('gb_dir_') || selectedKey.startsWith('dir_')) {
@@ -395,7 +408,9 @@ onUnmounted(() => {
 
 <style lang="less" scoped>
 .monitor-sidebar {
-  width: 280px;
+  width: 350px;
+  height: 100%;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -598,7 +613,46 @@ onUnmounted(() => {
   z-index: 1;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
   background: linear-gradient(to bottom, rgba(15, 34, 73, 0.4), rgba(24, 46, 90, 0.3));
+}
+
+.sidebar-tree-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+
+  :deep(.sidebar-device-tree) {
+    flex: 1;
+    min-height: 0;
+    height: 100%;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+
+    .ant-spin-nested-loading,
+    .ant-spin-container {
+      flex: 1;
+      min-height: 0;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background: transparent !important;
+    }
+
+    .scroll-container {
+      flex: 1;
+      min-height: 0;
+      background: transparent !important;
+    }
+
+    .scrollbar {
+      height: 100%;
+    }
+  }
 
   // 覆盖 BasicTree 的所有背景色
   :deep(.tree) {
@@ -634,16 +688,6 @@ onUnmounted(() => {
   :deep(.xingyuv-tree-header) {
     margin-bottom: 12px !important;
     border-bottom: none !important;
-  }
-
-  // 覆盖 Spin 组件的背景
-  :deep(.ant-spin-container) {
-    background: transparent !important;
-  }
-
-  // 覆盖 ScrollContainer 的背景
-  :deep(.scroll-container) {
-    background: transparent !important;
   }
 
   :deep(.ant-tree) {
@@ -753,32 +797,22 @@ onUnmounted(() => {
       }
     }
   }
-}
 
-.sidebar-tree-wrapper {
-  height: 100%;
-  overflow-y: auto;
-  overflow-x: hidden;
-  background: transparent !important;
-
-  // 自定义滚动条
-  &::-webkit-scrollbar {
-    width: 6px;
+  /* 大屏主题：滚动条悬停可见（与分屏监控 ScrollContainer 行为一致） */
+  :deep(.scrollbar__bar) {
+    opacity: 0.35;
   }
 
-  &::-webkit-scrollbar-track {
-    background: rgba(52, 134, 218, 0.1);
-    border-radius: 3px;
+  :deep(.scrollbar:hover .scrollbar__bar) {
+    opacity: 1;
   }
 
-  &::-webkit-scrollbar-thumb {
-    background: rgba(52, 134, 218, 0.5);
-    border-radius: 3px;
-    transition: all 0.3s;
+  :deep(.scrollbar__thumb) {
+    background-color: rgba(52, 134, 218, 0.45);
+  }
 
-    &:hover {
-      background: rgba(52, 134, 218, 0.7);
-    }
+  :deep(.scrollbar__thumb:hover) {
+    background-color: rgba(52, 134, 218, 0.7);
   }
 }
 </style>

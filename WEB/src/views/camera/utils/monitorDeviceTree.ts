@@ -1,26 +1,72 @@
 import type { TreeItem } from '@/components/Tree';
 import type { MonitorTreeDeviceNode, MonitorTreeDirectoryNode } from '@/api/device/camera';
-import { formatCameraDeviceLabel, isGb28181Device } from './deviceLabel';
+import { formatCameraDeviceLabel, isGb28181Device, isNvrChannelDevice } from './deviceLabel';
+import { resolveWvpSipDeviceId } from './gb28181DeviceGroup';
 import {
   buildGbChannelNodesFromSynced,
   buildGbSipDeviceNode,
   groupGb28181ChannelsBySip,
 } from './gb28181Tree';
+import {
+  appendNvrGroupedNodesToChildren,
+  buildNvrNameMap,
+  enrichMonitorDevicesWithNvrs,
+} from './nvrMonitorTree';
+import type { NvrInfo } from './nvrDeviceGroup';
 
-/** 将目录下设备挂到树 children：直连为叶子，国标按 SIP 设备分组 */
+/** 监控树节点是否为 NVR 挂载通道叶子 */
+export function isMonitorNvrChannelNode(node: TreeItem): boolean {
+  const key = String(node.key ?? '');
+  if (!key.startsWith('device_')) return false;
+  const device = (node as { device?: MonitorTreeDeviceNode }).device;
+  return !!device && isNvrChannelDevice(device);
+}
+
+/** 监控树节点是否为 NVR 父节点（其下挂通道） */
+export function isMonitorNvrParentNode(node: TreeItem): boolean {
+  return String(node.key ?? '').startsWith('nvr_');
+}
+
+export interface MonitorTreeBuildOptions {
+  showDeviceCountInTitle?: boolean;
+  sipNameMap?: Map<string, string>;
+  nvrNameMap?: Map<number, string>;
+  nvrs?: NvrInfo[];
+  /** WVP 国标 SIP 列表：用于补全未同步通道但仍需展示的设备节点 */
+  wvpDevices?: Record<string, any>[];
+}
+
+/** 将目录下设备挂到树 children：直连为叶子，NVR 通道归 NVR，国标按 SIP 分组 */
 export function appendDevicesToMonitorTreeChildren(
   children: TreeItem[],
   devices: MonitorTreeDeviceNode[],
-  sipNameMap?: Map<string, string>,
+  options?: {
+    sipNameMap?: Map<string, string>;
+    nvrNameMap?: Map<number, string>;
+    nvrs?: NvrInfo[];
+    wvpDevices?: Record<string, any>[];
+    /** 默认分组下补全 WVP 中尚未同步的国标 SIP 设备节点 */
+    appendUnsyncedWvpGb?: boolean;
+    /** 默认分组下补全尚未出现在目录中的 NVR 父节点 */
+    appendAllNvrs?: boolean;
+  },
 ) {
+  const sipNameMap = options?.sipNameMap;
+  const nvrNameMap = options?.nvrNameMap;
+  const nvrs = options?.nvrs ?? [];
+  const enrichedDevices = enrichMonitorDevicesWithNvrs(devices, nvrs);
   const direct: MonitorTreeDeviceNode[] = [];
-  const gbGrouped = groupGb28181ChannelsBySip(devices);
+  const gbChannels: MonitorTreeDeviceNode[] = [];
 
-  for (const d of devices) {
-    if (!isGb28181Device(d.source, d.device_kind)) {
+  for (const d of enrichedDevices) {
+    if (isGb28181Device(d.source, d.device_kind)) {
+      gbChannels.push(d);
+    } else if (!isNvrChannelDevice(d, nvrs)) {
       direct.push(d);
     }
   }
+
+  const gbGrouped = groupGb28181ChannelsBySip(gbChannels);
 
   direct.forEach((d) => {
     children.push({
@@ -33,18 +79,40 @@ export function appendDevicesToMonitorTreeChildren(
     } as TreeItem);
   });
 
+  appendNvrGroupedNodesToChildren(children, enrichedDevices, {
+    nvrNameMap,
+    nvrs,
+    appendAllNvrs: options?.appendAllNvrs,
+  });
+
+  const addedGbSip = new Set<string>();
   gbGrouped.forEach((channels, sipDeviceId) => {
+    addedGbSip.add(sipDeviceId);
     const channelNodes = buildGbChannelNodesFromSynced(channels, sipDeviceId);
     children.push(buildGbSipDeviceNode(sipDeviceId, channelNodes, sipNameMap?.get(sipDeviceId)));
   });
+
+  if (options?.appendUnsyncedWvpGb && options.wvpDevices?.length) {
+    for (const wvp of options.wvpDevices) {
+      const sipId = resolveWvpSipDeviceId(wvp);
+      if (!sipId || addedGbSip.has(sipId)) continue;
+      addedGbSip.add(sipId);
+      children.push(
+        buildGbSipDeviceNode(sipId, [], sipNameMap?.get(sipId) || String(wvp.name || '').trim() || undefined),
+      );
+    }
+  }
 }
 
 export function buildMonitorDirectoryTreeNodes(
   directories: MonitorTreeDirectoryNode[],
-  options?: { showDeviceCountInTitle?: boolean; sipNameMap?: Map<string, string> },
+  options?: MonitorTreeBuildOptions,
 ): TreeItem[] {
   const showCount = options?.showDeviceCountInTitle !== false;
   const sipNameMap = options?.sipNameMap;
+  const nvrNameMap = options?.nvrNameMap;
+  const nvrs = options?.nvrs;
+  const wvpDevices = options?.wvpDevices;
 
   const mapDirectory = (dir: MonitorTreeDirectoryNode): TreeItem => {
     const children: TreeItem[] = [];
@@ -52,7 +120,23 @@ export function buildMonitorDirectoryTreeNodes(
       children.push(...dir.children.map(mapDirectory));
     }
     if (dir.devices?.length) {
-      appendDevicesToMonitorTreeChildren(children, dir.devices, sipNameMap);
+      appendDevicesToMonitorTreeChildren(children, dir.devices, {
+        sipNameMap,
+        nvrNameMap,
+        nvrs,
+        wvpDevices,
+        appendUnsyncedWvpGb: false,
+        appendAllNvrs: !!dir.is_default,
+      });
+    } else if (dir.is_default && nvrs?.length) {
+      appendDevicesToMonitorTreeChildren(children, [], {
+        sipNameMap,
+        nvrNameMap,
+        nvrs,
+        wvpDevices,
+        appendUnsyncedWvpGb: false,
+        appendAllNvrs: true,
+      });
     }
     const deviceCount = dir.device_count ?? dir.devices?.length ?? 0;
     return {
@@ -68,12 +152,24 @@ export function buildMonitorDirectoryTreeNodes(
   return (directories || []).map(mapDirectory);
 }
 
+export function buildMonitorTreeOptionsFromNvrList(nvrs: NvrInfo[]): {
+  nvrNameMap: Map<number, string>;
+  nvrs: NvrInfo[];
+} {
+  return { nvrNameMap: buildNvrNameMap(nvrs), nvrs };
+}
+
+/** 首屏展开目录、NVR 父节点及已有子节点的国标设备，便于看到挂载关系 */
 export function collectMonitorTreeExpandedKeys(nodes: TreeItem[]): string[] {
   const keys: string[] = [];
   const walk = (list: TreeItem[]) => {
     list.forEach((n) => {
       const key = String(n.key);
-      if (key.startsWith('dir_') || key.startsWith('gb_dev_')) {
+      if (
+        key.startsWith('dir_') ||
+        key.startsWith('nvr_') ||
+        (key.startsWith('gb_dev_') && n.children?.length)
+      ) {
         keys.push(key);
       }
       if (n.children?.length) walk(n.children as TreeItem[]);
@@ -146,11 +242,12 @@ export function parseMonitorDirectoryId(key: string): number | null {
   return Number.isFinite(id) ? id : null;
 }
 
-/** 节点是否可移动到目录（直连设备或已入库的国标通道） */
+/** 节点是否可移动到目录（直连设备或已入库的国标通道；NVR 挂载通道仅随 NVR 父节点批量移动） */
 export function getMonitorNodeMoveableDeviceId(node: TreeItem): string | null {
   const key = String(node.key ?? '');
   if (key.startsWith('device_')) {
     const device = (node as any).device as MonitorTreeDeviceNode | undefined;
+    if (device && isNvrChannelDevice(device)) return null;
     return device?.id ?? key.slice('device_'.length);
   }
   if (key.startsWith('gb_ch_')) {
@@ -160,9 +257,39 @@ export function getMonitorNodeMoveableDeviceId(node: TreeItem): string | null {
   return null;
 }
 
-/** 是否显示单设备「移动到目录」操作 */
+/** 是否显示单设备「移动到目录」操作（NVR 挂载通道仅允许在 NVR 父节点批量移动） */
 export function canShowMonitorDeviceMoveAction(node: TreeItem): boolean {
+  if (isMonitorNvrChannelNode(node) || isMonitorNvrParentNode(node)) return false;
   return !!getMonitorNodeMoveableDeviceId(node);
+}
+
+/** 是否显示 NVR 父节点「批量移动到目录」/「移回默认分组」 */
+export function canShowMonitorNvrBatchMoveAction(node: TreeItem): boolean {
+  return isMonitorNvrParentNode(node);
+}
+
+/** 收集 NVR 父节点下全部挂载通道（用于批量移动/移回默认分组） */
+export function collectNvrChannelDevicesUnderNode(node: TreeItem): MonitorTreeDeviceNode[] {
+  if (!isMonitorNvrParentNode(node)) return [];
+  const result: MonitorTreeDeviceNode[] = [];
+  const seen = new Set<string>();
+
+  const walk = (n: TreeItem) => {
+    const key = String(n.key ?? '');
+    const device = (n as { device?: MonitorTreeDeviceNode }).device;
+    if (key.startsWith('device_') && device && isNvrChannelDevice(device)) {
+      if (!seen.has(device.id)) {
+        seen.add(device.id);
+        result.push(device);
+      }
+    }
+    if (n.children?.length) {
+      (n.children as TreeItem[]).forEach(walk);
+    }
+  };
+
+  walk(node);
+  return result;
 }
 
 /** 是否显示目录「批量移动」操作 */

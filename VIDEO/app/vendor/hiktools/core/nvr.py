@@ -29,6 +29,23 @@ DAHUA_DEVICE_CLASS = "/cgi-bin/magicBox.cgi?action=getDeviceClass"
 DAHUA_SYSTEM_INFO = "/cgi-bin/magicBox.cgi?action=getSystemInfo"
 DAHUA_DEVICE_TYPE = "/cgi-bin/magicBox.cgi?action=getDeviceType"
 
+_GENERIC_CAMERA_NAME = re.compile(r'^camera\s*0*\d+\s*$', re.IGNORECASE)
+
+
+def _effective_channel_name(
+    name: str | None,
+    channel_id: int,
+    camera_ip: str | None = None,
+) -> str | None:
+    """海康 VideoInput 等接口常返回重复的 Camera 01，改为带通道号/IPC IP 的可区分名称。"""
+    n = (name or '').strip()
+    if n and not _GENERIC_CAMERA_NAME.match(n):
+        return n
+    if camera_ip:
+        return f'CH{channel_id}-{camera_ip}'
+    return f'CH{channel_id}'
+
+
 DAHUA_CHANNEL_CONFIGS = (
     "RemoteDevice",
     "RemoteVideoInput",
@@ -73,10 +90,27 @@ def _parse_channel_block(block: str) -> dict[str, Any]:
     enabled: bool | None = None
     if enabled_raw is not None:
         enabled = enabled_raw.lower() == "true"
+    channel_id_raw = (
+        _xml_text(block, "id")
+        or _xml_text(block, "videoInputChannelID")
+        or _xml_text(block, "srcInputPort")
+        or _xml_text(block, "inputPort")
+    )
+    camera_ip = _xml_text(block, "ipAddress")
+    raw_name = _xml_text(block, "name") or _xml_text(block, "channelName")
+    try:
+        cid = int(channel_id_raw) if channel_id_raw else None
+    except ValueError:
+        cid = None
+    display_name = (
+        _effective_channel_name(raw_name, cid, camera_ip)
+        if cid is not None
+        else raw_name
+    )
     return {
-        "channel_id": _xml_text(block, "id"),
-        "name": _xml_text(block, "name") or _xml_text(block, "channelName"),
-        "ip": _xml_text(block, "ipAddress"),
+        "channel_id": channel_id_raw,
+        "name": display_name,
+        "ip": camera_ip,
         "port": port,
         "protocol": _xml_text(block, "proxyProtocol"),
         "username": _xml_text(block, "userName"),
@@ -179,6 +213,7 @@ class NvrInventory:
     nvr_device_type: str | None = None
     channels: list[NvrChannel] = field(default_factory=list)
     error: str | None = None
+    auth_username: str | None = None
     scanned_at: datetime = field(default_factory=datetime.now)
 
     @property
@@ -195,10 +230,12 @@ class NvrInventory:
 def _rows_to_channels(rows: list[dict[str, Any]]) -> list[NvrChannel]:
     channels: list[NvrChannel] = []
     for row in rows:
+        cid = row["channel_id"]
+        cam_ip = row.get("ip")
         channels.append(
             NvrChannel(
-                channel_id=row["channel_id"],
-                name=row.get("name"),
+                channel_id=cid,
+                name=_effective_channel_name(row.get("name"), cid, cam_ip),
                 camera_ip=row.get("ip"),
                 camera_port=row.get("port"),
                 protocol=row.get("protocol"),
@@ -462,6 +499,8 @@ async def inventory_nvr(
         if nvr_vendor == VENDOR_HIKVISION:
             info = await fetch_device_info(client, base_url, credentials, timeout)
             auth_cred = info.used_credential
+            if auth_cred:
+                inv.auth_username = auth_cred.username
             if info.status == 200 and info.body:
                 parsed = parse_isapi_xml(info.body)
                 inv.nvr_model = parsed.get("model")
@@ -475,6 +514,9 @@ async def inventory_nvr(
         else:
             for path in (DAHUA_SYSTEM_INFO, DAHUA_DEVICE_TYPE, DAHUA_DEVICE_CLASS):
                 res = await fetch_dahua_cgi(client, base_url, path, credentials, timeout)
+                if res.used_credential and not inv.auth_username:
+                    inv.auth_username = res.used_credential.username
+                    auth_cred = res.used_credential
                 if res.status == 200 and res.body:
                     parsed = parse_dahua_cgi(res.body)
                     inv.nvr_model = inv.nvr_model or parsed.get("model") or parsed.get("type")

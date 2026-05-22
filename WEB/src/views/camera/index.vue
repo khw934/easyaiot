@@ -4,6 +4,7 @@
       <Tabs
         :activeKey="state.activeKey"
         :animated="{ inkBar: true, tabPane: true }"
+        :destroyInactiveTabPane="true"
         :tabBarGutter="60"
         @tabClick="handleTabClick"
       >
@@ -25,12 +26,17 @@
           />
           <NvrDeviceDetail
             v-else-if="nvrDetailVisible"
+            ref="nvrDeviceDetailRef"
             :nvr-id="nvrDetailId"
             :title="nvrDetailTitle"
+            :device-stream-statuses="deviceStreamStatuses"
             @back="closeNvrDetail"
             @view="handleNvrChannelView"
             @edit="handleNvrChannelEdit"
             @play="handleCardPlay"
+            @playAI="handleCardPlayAI"
+            @toggleStream="handleCardToggleStream"
+            @delete="handleNvrChannelDelete"
           />
           <template v-else>
           <!-- 列表模式 -->
@@ -119,6 +125,9 @@
                   @view-gb-device="handleViewGbDevice"
                   @edit-gb-device="handleEditGbDevice"
                   @open-nvr-device="handleOpenNvrDevice"
+                  @view-nvr-device="handleViewNvrDevice"
+                  @edit-nvr-device="handleEditNvrDevice"
+                  @delete-nvr-device="handleDeleteNvrDevice"
                 >
                   <template #header>
                     <a-button type="primary" @click="handleScanOnvif">
@@ -167,6 +176,7 @@
           <VideoModal @register="registerAddModel" @success="handleSuccess"/>
           <SegmentScanModal @register="registerSegmentScanModal" @success="handleSuccess"/>
           <Gb28181DeviceModal @register="registerGbDeviceModal" @success="handleSuccess"/>
+          <NvrDeviceModal @register="registerNvrDeviceModal" @success="handleSuccess"/>
         </TabPane>
         <TabPane key="3" tab="抓拍空间">
           <SnapSpace ref="snapSpaceRef"/>
@@ -199,16 +209,18 @@ import {BasicTable, TableAction, useTable} from '@/components/Table';
 import {useMessage} from '@/hooks/web/useMessage';
 import {getBasicColumns, getFormConfig} from "./Data";
 import {useModal} from "@/components/Modal";
+import {useDrawer} from '@/components/Drawer';
 import VideoModal from "./components/VideoModal/index.vue";
 import {
   deleteDevice,
+  deleteNvr,
   DeviceInfo,
   getDeviceList,
   getStreamStatus,
   refreshDevices,
   startStreamForwarding,
   stopStreamForwarding,
-  StreamStatusResponse
+  StreamStatusResponse,
 } from '@/api/device/camera';
 import {
   ClusterOutlined,
@@ -227,6 +239,7 @@ import RecordSpace from "./components/RecordSpace/index.vue";
 import DeviceMixedCardList from './components/DeviceMixedCardList/index.vue';
 import Gb28181DeviceDetail from './components/Gb28181DeviceDetail/index.vue';
 import NvrDeviceDetail from './components/NvrDeviceDetail/index.vue';
+import NvrDeviceModal from './components/NvrDeviceModal/index.vue';
 import Gb28181DeviceModal from './components/Gb28181DeviceModal/index.vue';
 import type { Gb28181CardItem } from './components/Gb28181DeviceCard/index.vue';
 import type { NvrCardItem } from './utils/nvrDeviceGroup';
@@ -253,8 +266,17 @@ const route = useRoute();
 
 const {createMessage} = useMessage();
 const [registerAddModel, {openModal}] = useModal();
-const [registerSegmentScanModal, {openModal: openSegmentScanModal}] = useModal();
+const [registerSegmentScanModal, { openDrawer: openSegmentScanModal, setDrawerProps: setSegmentScanDrawerProps }] =
+  useDrawer();
+
+function openSegmentScanDrawer(mode: 'camera' | 'nvr') {
+  setSegmentScanDrawerProps({
+    title: mode === 'nvr' ? '通过网段注册 NVR' : '通过网段注册摄像头',
+  });
+  openSegmentScanModal(true, { mode });
+}
 const [registerGbDeviceModal, {openModal: openGbDeviceModal}] = useModal();
+const [registerNvrDeviceModal, {openModal: openNvrDeviceModal}] = useModal();
 
 const [registerPlayerAddModel, {openModal: openPlayerAddModel}] = useModal();
 
@@ -272,6 +294,7 @@ const splitScreenInitialMode = ref<'config' | 'monitor'>('monitor');
 
 // 混合设备卡片列表引用
 const deviceMixedCardListRef = ref();
+const nvrDeviceDetailRef = ref();
 
 // 国标设备详情内页
 const gbDetailVisible = ref(false);
@@ -399,6 +422,39 @@ function closeNvrDetail() {
 
 function handleOpenNvrDevice(item: NvrCardItem) {
   openNvrDetail(item);
+}
+
+function openNvrInfoModal(type: 'view' | 'edit', item: NvrCardItem | { nvr_id_num?: number; nvrId?: number }) {
+  const nvrId = 'nvrId' in item && item.nvrId
+    ? item.nvrId
+    : (item as { nvr_id_num?: number }).nvr_id_num ?? 0;
+  if (!nvrId) {
+    createMessage.warning('缺少 NVR ID');
+    return;
+  }
+  openNvrDeviceModal(true, { isView: type === 'view', nvrId });
+}
+
+function handleViewNvrDevice(item: NvrCardItem) {
+  openNvrInfoModal('view', item);
+}
+
+function handleEditNvrDevice(item: NvrCardItem) {
+  openNvrInfoModal('edit', item);
+}
+
+async function handleDeleteNvrDevice(item: NvrCardItem) {
+  try {
+    await deleteNvr(item.nvrId);
+    createMessage.success('删除成功');
+    if (nvrDetailVisible.value && nvrDetailId.value === item.nvrId) {
+      closeNvrDetail();
+    }
+    handleSuccess();
+  } catch (error) {
+    console.error('删除 NVR 失败', error);
+    createMessage.error('删除失败');
+  }
 }
 
 function handleNvrChannelView(device: DeviceInfo) {
@@ -574,19 +630,48 @@ const startStatusCheckTimer = () => {
 const getTableActions = (record) => {
   if (isNvrListRow(record)) {
     const nvrId = record.nvr_id_num ?? Number(String(record.id).replace(/^nvr_/, ''));
+    const nvrCard = {
+      nvrId,
+      name: record.name || `[NVR] ${record.ip}`,
+      ip: record.ip,
+      port: record.port ?? 80,
+      camera_count: record.channel_count ?? 0,
+      _nvr: { id: nvrId, ip: record.ip },
+    } as NvrCardItem;
     return [
       {
         icon: 'ant-design:cluster-outlined',
         tooltip: '挂载摄像头',
+        onClick: () => openNvrDetail(nvrCard),
+      },
+      {
+        icon: 'ant-design:eye-filled',
+        tooltip: '详情',
+        onClick: () => openNvrInfoModal('view', { nvr_id_num: nvrId }),
+      },
+      {
+        icon: 'ant-design:edit-filled',
+        tooltip: '编辑',
+        onClick: () => openNvrInfoModal('edit', { nvr_id_num: nvrId }),
+      },
+      {
+        icon: 'ant-design:copy-outlined',
+        tooltip: '复制 IP',
         onClick: () => {
-          openNvrDetail({
-            nvrId,
-            name: record.name || `[NVR] ${record.ip}`,
-            ip: record.ip,
-            port: record.port ?? 80,
-            camera_count: record.channel_count ?? 0,
-            _nvr: { id: nvrId, ip: record.ip },
-          } as NvrCardItem);
+          const text = `${record.ip}:${record.port ?? 80}`;
+          navigator.clipboard?.writeText(text).then(
+            () => createMessage.success('复制成功'),
+            () => createMessage.error('复制失败'),
+          );
+        },
+      },
+      {
+        icon: 'ant-design:delete-outlined',
+        color: 'error',
+        tooltip: '删除',
+        popConfirm: {
+          title: '删除后挂载摄像头将解除关联，是否确认？',
+          confirm: () => handleDeleteNvrDevice(nvrCard),
         },
       },
     ];
@@ -793,8 +878,8 @@ const openAddModal = (type, record = null) => {
 const handleScanOnvif = () => openAddModal('onvif');
 
 /** 网段 HTTP 指纹扫描（hiktools） */
-const handleScanSegmentCamera = () => openSegmentScanModal(true, { mode: 'camera' });
-const handleScanSegmentNvr = () => openSegmentScanModal(true, { mode: 'nvr' });
+const handleScanSegmentCamera = () => openSegmentScanDrawer('camera');
+const handleScanSegmentNvr = () => openSegmentScanDrawer('nvr');
 
 /** 后台刷新已录入设备的 IP（POST /video/camera/refresh） */
 const handleRefreshOnvifDevices = async () => {
@@ -848,6 +933,13 @@ const handleCardEdit = (record) => {
 const handleCardDelete = async (record) => {
   await handleDelete(record);
 };
+
+async function handleNvrChannelDelete(record: DeviceInfo) {
+  await handleDelete(record);
+  if (nvrDetailVisible.value) {
+    nvrDeviceDetailRef.value?.load?.();
+  }
+}
 
 const handleCardPlay = (record) => {
   handlePlay(record);

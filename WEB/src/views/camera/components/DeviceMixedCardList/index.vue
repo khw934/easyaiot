@@ -27,7 +27,13 @@
               v-if="item.type === 'nvr'"
               class="product-item normal nvr-list-item"
             >
-              <NvrDeviceCard :item="item.nvrItem" @open="handleNvrCardOpen" />
+              <NvrDeviceCard
+                :item="item.nvrItem"
+                @open="handleNvrCardOpen"
+                @view="handleNvrCardView"
+                @edit="handleNvrCardEdit"
+                @delete="handleNvrCardDelete"
+              />
             </ListItem>
             <ListItem
               v-else-if="item.type === 'gb_sip'"
@@ -159,12 +165,12 @@ import type { DeviceInfo, StreamStatusResponse } from '@/api/device/camera';
 import { getDeviceList } from '@/api/device/camera';
 import { formatCameraDeviceLabel } from '@/views/camera/utils/deviceLabel';
 import { hasDirectPlayStream, supportsRtspForward } from '@/views/camera/utils/devicePlay';
-import { queryVideoList } from '@/api/device/gb28181';
+import { queryAllVideoList } from '@/api/device/gb28181';
 import {
   buildMergedCardRows,
   type GbSipDeviceSummary,
 } from '@/views/camera/utils/gb28181DeviceGroup';
-import { fetchNvrList } from '@/views/camera/utils/nvrDeviceGroup';
+import { fetchNvrListBrief } from '@/views/camera/utils/nvrDeviceGroup';
 import type { NvrCardItem } from '@/views/camera/utils/nvrDeviceGroup';
 import Gb28181DeviceCard, {
   type Gb28181CardItem,
@@ -190,6 +196,9 @@ const emit = defineEmits([
   'viewGbDevice',
   'editGbDevice',
   'openNvrDevice',
+  'viewNvrDevice',
+  'editNvrDevice',
+  'deleteNvrDevice',
 ]);
 
 const { createMessage } = useMessage();
@@ -331,9 +340,7 @@ async function fetch(p: Record<string, any> = {}) {
         search: search || undefined,
         ...p,
       }),
-      queryVideoList({
-        page: 1,
-        count: 10000,
+      queryAllVideoList({
         query: search || undefined,
         status:
           p.online === true || p.online === 'true'
@@ -342,7 +349,7 @@ async function fetch(p: Record<string, any> = {}) {
               ? false
               : undefined,
       }),
-      fetchNvrList(),
+      fetchNvrListBrief(),
     ]);
     let devices: DeviceInfo[] = [];
     if (devRes?.data) {
@@ -383,6 +390,18 @@ function pageSizeChange(_current: number, size: number) {
 
 function handleNvrCardOpen(item: NvrCardItem) {
   emit('openNvrDevice', item);
+}
+
+function handleNvrCardView(item: NvrCardItem) {
+  emit('viewNvrDevice', item);
+}
+
+function handleNvrCardEdit(item: NvrCardItem) {
+  emit('editNvrDevice', item);
+}
+
+function handleNvrCardDelete(item: NvrCardItem) {
+  emit('deleteNvrDevice', item);
 }
 
 function handleGbCardOpen(item: Gb28181CardItem) {

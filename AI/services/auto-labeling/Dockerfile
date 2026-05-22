@@ -29,6 +29,9 @@ RUN pip install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple && \
 
 COPY . .
 
+# 构建时校验前端静态资源（clone 后若缺少 static 会在此失败，便于排查）
+RUN test -f static/style.css && test -f static/script.js && test -f static/all.min.css
+
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \

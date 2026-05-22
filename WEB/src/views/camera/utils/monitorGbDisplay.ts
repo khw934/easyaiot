@@ -1,6 +1,7 @@
 import type { TreeItem } from '@/components/Tree';
-import type { MonitorTreeDeviceNode } from '@/api/device/camera';
-import { formatCameraDeviceLabel } from './deviceLabel';
+import type { MonitorTreeDeviceNode, MonitorTreeDirectoryNode } from '@/api/device/camera';
+import { formatCameraDeviceLabel, isGb28181Device, parseGb28181Source } from './deviceLabel';
+import { resolveWvpSipDeviceId } from './gb28181DeviceGroup';
 import { findMonitorGbDeviceByChannel } from './monitorDeviceTree';
 import type { GbChannelRef } from './gb28181Tree';
 
@@ -8,11 +9,32 @@ import type { GbChannelRef } from './gb28181Tree';
 export function buildGbSipNameMap(wvpDevices: Record<string, any>[]): Map<string, string> {
   const map = new Map<string, string>();
   for (const wvp of wvpDevices) {
-    const sip = String(wvp.deviceIdentification ?? wvp.deviceId ?? '').trim();
+    const sip = resolveWvpSipDeviceId(wvp);
     if (!sip) continue;
     const name = String(wvp.name || '').trim();
     if (name) map.set(sip, name);
   }
+  return map;
+}
+
+/** 从目录监控树已同步的国标通道推导 SIP 展示名（首屏无需拉全量 WVP） */
+export function buildGbSipNameMapFromDirectoryTree(
+  directories: MonitorTreeDirectoryNode[],
+): Map<string, string> {
+  const map = new Map<string, string>();
+  const walk = (dirs: MonitorTreeDirectoryNode[]) => {
+    for (const dir of dirs) {
+      for (const d of dir.devices || []) {
+        if (!isGb28181Device(d.source, d.device_kind)) continue;
+        const parsed = parseGb28181Source(d.source);
+        if (!parsed || map.has(parsed.deviceId)) continue;
+        const raw = (d.name || '').replace(/^\[GB28181\]\s*/, '').trim();
+        if (raw) map.set(parsed.deviceId, raw);
+      }
+      if (dir.children?.length) walk(dir.children);
+    }
+  };
+  walk(directories || []);
   return map;
 }
 

@@ -100,13 +100,6 @@
               </Input>
             </FormItem>
           </template>
-          <NvrMountFields
-            v-if="!state.isView"
-            :disabled="state.isView"
-            v-model:nvr-id="modelRef.nvr_id"
-            v-model:nvr-channel="modelRef.nvr_channel"
-            v-model:nvr="modelRef.nvr"
-          />
         </Form>
         <!-- 其他组件 -->
         <Form
@@ -215,12 +208,17 @@
                 />
               </FormItem>
             </Col>
-            <Col :span="12" v-if="state.isView && modelRef.nvr_label">
+            <Col :span="12" v-if="isNvrChannel && modelRef.nvr_channel">
+              <FormItem label="NVR通道号">
+                <Input :value="`CH${modelRef.nvr_channel}`" disabled />
+              </FormItem>
+            </Col>
+            <Col :span="12" v-else-if="state.isView && modelRef.nvr_label">
               <FormItem label="所属NVR">
                 <Input :value="modelRef.nvr_label" disabled />
               </FormItem>
             </Col>
-            <Col :span="24" v-if="!state.isView">
+            <Col :span="24" v-if="!state.isView && !isNvrChannel">
               <NvrMountFields
                 v-model:nvr-id="modelRef.nvr_id"
                 v-model:nvr-channel="modelRef.nvr_channel"
@@ -235,6 +233,7 @@
 </template>
 <script lang="ts" setup>
 import {computed, nextTick, reactive, ref} from 'vue';
+import { isNvrChannelDevice } from '@/views/camera/utils/deviceLabel';
 import {BasicModal, useModal, useModalInner} from '@/components/Modal';
 import {BasicTable, useTable} from '@/components/Table';
 import VideoRegisterModal from '../VideoRegisterModal/index.vue';
@@ -310,12 +309,30 @@ const modelRef = reactive({
 });
 
 
+/** NVR 下挂载的通道设备不可改挂其他 NVR */
+const isNvrChannel = computed(() =>
+  isNvrChannelDevice({
+    device_kind: (state.record as { device_kind?: string } | null)?.device_kind,
+    nvr_id: modelRef.nvr_id ?? (state.record as { nvr_id?: number } | null)?.nvr_id,
+  }),
+);
+
 const getTitle = computed(() => {
   if (state.type === 'onvif') {
     return '扫描局域网ONVIF设备';
   }
+  if (state.type === 'source' && !state.isEdit && !state.isView) {
+    return '新增直连设备';
+  }
   return state.isEdit ? '编辑视频设备' : state.isView ? '查看视频设备' : '新增视频设备';
 });
+
+function stripNvrMountFromPayload(data: Record<string, unknown>) {
+  delete data.nvr;
+  delete data.nvr_id;
+  delete data.nvr_channel;
+  delete data.nvr_label;
+}
 
 const [registerVideoRegisterModal, {openModal: openVideoRegisterModal}] = useModal();
 
@@ -342,6 +359,7 @@ const [register, {closeModal}] = useModalInner(async (data) => {
   state.isEdit = isEdit;
   state.isView = isView;
   state.type = type;
+  state.record = record ?? null;
 
   if (type === 'onvif') {
     await nextTick();
@@ -615,9 +633,14 @@ function openRegisterModal(record: Record<string, unknown>) {
 
 async function handleRegisterSuccess(payload: Record<string, unknown>) {
   const ip = String(payload.ip ?? '');
+  const username = String(payload.username ?? '').trim();
   const password = String(payload.password ?? '');
   if (!ip || !password) {
     createMessage.error('IP 或密码不能为空');
+    return;
+  }
+  if (!username) {
+    createMessage.error('用户名不能为空');
     return;
   }
   const rawPort = payload.port;
@@ -626,7 +649,12 @@ async function handleRegisterSuccess(payload: Record<string, unknown>) {
     : 80;
   state.editLoading = true;
   try {
-    await registerDeviceByOnvif({ip, port: Number.isFinite(port) ? port : 80, password});
+    await registerDeviceByOnvif({
+      ip,
+      port: Number.isFinite(port) ? port : 80,
+      username,
+      password,
+    });
     createMessage.success('设备注册成功');
     closeModal();
     resetFields();
@@ -768,6 +796,9 @@ function handleOk() {
         if (state.type === 'source' && modelRef.cameraType === 'custom') {
           updateData.cameraType = 'custom';
         }
+        if (isNvrChannel.value) {
+          stripNvrMountFromPayload(updateData);
+        }
         await updateDevice(modelRef.id, updateData);
       } else if (state.type === 'camera') {
         // 摄像头处理
@@ -780,6 +811,9 @@ function handleOk() {
           // 如果是自定义类型，确保传递cameraType
           if (modelRef.cameraType === 'custom') {
             updateData.cameraType = 'custom';
+          }
+          if (isNvrChannel.value) {
+            stripNvrMountFromPayload(updateData);
           }
           await updateDevice(modelRef.id, updateData);
         } else {
@@ -821,6 +855,9 @@ function handleOk() {
           // 如果是自定义类型，确保传递cameraType
           if (modelRef.cameraType === 'custom') {
             updateData.cameraType = 'custom';
+          }
+          if (isNvrChannel.value) {
+            stripNvrMountFromPayload(updateData);
           }
           await updateDevice(modelRef.id, updateData);
           
