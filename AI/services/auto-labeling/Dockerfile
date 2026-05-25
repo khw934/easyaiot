@@ -22,8 +22,21 @@ RUN set -ex && \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple && \
-    pip install -r requirements.txt --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple && \
+COPY .offline-cache/pip /opt/offline-pip
+ARG OFFLINE_MODE=0
+
+RUN set -ex && \
+    if [ -n "$(find /opt/offline-pip -maxdepth 1 -type f 2>/dev/null)" ]; then \
+        echo "检测到本地离线 pip 资源，优先离线安装..." && \
+        pip install -r requirements.txt --no-index --find-links /opt/offline-pip; \
+    elif [ "$OFFLINE_MODE" = "1" ]; then \
+        echo "OFFLINE_MODE=1 且未检测到离线 pip 资源，请先执行 cache_resources.sh" && \
+        exit 1; \
+    else \
+        echo "未检测到离线 pip 资源，使用在线源安装..." && \
+        pip install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple && \
+        pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple; \
+    fi && \
     apt-get purge -y --auto-remove gcc g++ python3-dev && \
     rm -rf /var/lib/apt/lists/*
 

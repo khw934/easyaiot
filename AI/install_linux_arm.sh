@@ -34,6 +34,9 @@ cd "$SCRIPT_DIR"
 # ARM架构基础镜像
 ARM_BASE_IMAGE="pytorch/manylinuxaarch64-builder:cuda12.9"
 DOCKER_PLATFORM="linux/arm64"
+OFFLINE_CACHE_DIR="${SCRIPT_DIR}/.offline-cache"
+OFFLINE_DOCKER_CACHE_DIR="${OFFLINE_CACHE_DIR}/docker"
+OFFLINE_PIP_CACHE_DIR="${OFFLINE_CACHE_DIR}/pip"
 
 # 打印带颜色的消息
 print_info() {
@@ -50,6 +53,107 @@ print_warning() {
 
 print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
+}
+
+init_build_cache_dirs() {
+    mkdir -p "$OFFLINE_DOCKER_CACHE_DIR" "$OFFLINE_PIP_CACHE_DIR"
+    print_info "pip 离线缓存目录: $OFFLINE_PIP_CACHE_DIR"
+}
+
+prepare_cached_resources() {
+    mkdir -p "$OFFLINE_DOCKER_CACHE_DIR" "$OFFLINE_PIP_CACHE_DIR"
+    local cache_script="${SCRIPT_DIR}/cache_resources_arm.sh"
+
+    mkdir -p "$OFFLINE_PIP_CACHE_DIR"
+    if find "$OFFLINE_PIP_CACHE_DIR" -maxdepth 1 -type f \( -name "*.whl" -o -name "*.tar.gz" -o -name "*.zip" \) | grep -q .; then
+        print_success "检测到本地 pip 资源缓存目录: $OFFLINE_PIP_CACHE_DIR"
+    elif [ "${AUTO_CACHE_PIP:-1}" = "1" ]; then
+        if [ ! -f "$cache_script" ]; then
+            print_warning "未找到预缓存脚本: $cache_script，构建时将从网络下载"
+            return 0
+        fi
+        print_warning "未检测到本地 pip 资源缓存，自动执行 cache_resources_arm.sh 预下载..."
+        if [ -x "$cache_script" ]; then
+            "$cache_script"
+        else
+            /bin/bash "$cache_script"
+        fi
+        if find "$OFFLINE_PIP_CACHE_DIR" -maxdepth 1 -type f \( -name "*.whl" -o -name "*.tar.gz" -o -name "*.zip" \) | grep -q .; then
+            print_success "pip 离线缓存准备完成"
+        else
+            print_warning "预缓存执行完成但未检测到离线包，构建时将回退网络下载"
+        fi
+    else
+        print_info "未检测到本地 pip 资源缓存，构建时将从网络下载"
+        print_info "如需提前缓存，请手动执行: ./cache_resources_arm.sh"
+    fi
+}
+
+optimize_dockerfile_pip_cache() {
+    local dockerfile_path="$1"
+    if [ ! -f "$dockerfile_path" ]; then
+        return 0
+    fi
+
+    if grep -q -- "--no-cache-dir" "$dockerfile_path"; then
+        print_info "优化 ${dockerfile_path} 的 pip 缓存配置（移除 --no-cache-dir）..."
+        sed -i 's/ --no-cache-dir//g' "$dockerfile_path"
+        print_success "${dockerfile_path} 已启用 pip 缓存复用"
+    fi
+}
+
+build_with_cache() {
+    local no_cache_flag="$1"
+    local build_log="/tmp/docker_build_$$.log"
+    local build_status=0
+    local cache_opts=""
+    local max_retries=3
+    local attempt=1
+
+    init_build_cache_dirs
+    mkdir -p .offline-cache/pip
+    optimize_dockerfile_pip_cache Dockerfile
+    optimize_dockerfile_pip_cache Dockerfile.arm
+
+    cache_opts="--build-arg BASE_IMAGE=${ARM_BASE_IMAGE} --build-arg OFFLINE_MODE=${OFFLINE_MODE:-0}"
+    print_info "使用 docker build（ARM 离线 pip 缓存加速，BUILDKIT=0）..."
+    while [ $attempt -le $max_retries ]; do
+        print_info "执行构建（第 ${attempt}/${max_retries} 次）..."
+        set +e
+        DOCKER_BUILDKIT=0 docker build \
+            --target runtime \
+            --platform "$DOCKER_PLATFORM" \
+            -t ai-service:latest \
+            --pull=false \
+            $cache_opts \
+            $no_cache_flag \
+            . 2>&1 | tee "$build_log"
+        build_status=${PIPESTATUS[0]}
+        set -e
+
+        if [ $build_status -eq 0 ]; then
+            break
+        fi
+
+        if grep -qiE "(failed to fetch anonymous token|dial tcp .*:443: i/o timeout|DeadlineExceeded|failed to resolve source metadata)" "$build_log" && [ $attempt -lt $max_retries ]; then
+            print_warning "检测到访问 Docker Hub 超时，10 秒后自动重试..."
+            sleep 10
+            attempt=$((attempt + 1))
+            continue
+        fi
+
+        break
+    done
+
+    if [ $build_status -ne 0 ]; then
+        print_error "镜像构建失败"
+        grep -iE "(error|warning|failed|失败|警告)" "$build_log" | tail -20 || true
+        rm -f "$build_log"
+        return 1
+    fi
+
+    rm -f "$build_log"
+    return 0
 }
 
 # 检查命令是否存在
@@ -160,6 +264,9 @@ configure_arm_dockerfile() {
         cp Dockerfile.arm Dockerfile
         print_success "已创建 ARM 版本的 Dockerfile"
     fi
+
+    optimize_dockerfile_pip_cache Dockerfile
+    optimize_dockerfile_pip_cache Dockerfile.arm
 }
 
 # 恢复原始 Dockerfile（可选）
@@ -328,30 +435,16 @@ install_service() {
     check_network
     create_directories
     create_env_file
+    prepare_cached_resources
     
-    print_info "构建 Docker 镜像（ARM架构，根据代码重新构建）..."
+    print_info "构建 Docker 镜像（ARM架构，优先复用离线 pip 缓存）..."
     print_info "架构: $ARCH, 平台: $DOCKER_PLATFORM, 基础镜像: $ARM_BASE_IMAGE"
     print_warning "首次构建可能需要较长时间（20-40分钟），请耐心等待..."
-    print_info "正在下载基础镜像和安装依赖..."
-    print_info "构建进度将实时显示，请勿中断..."
     echo ""
     
-    # 使用 docker build 命令构建镜像（install 时总是重新构建）
-    BUILD_LOG="/tmp/docker_build_$$.log"
-    set +e  # 暂时关闭错误退出，以便捕获构建状态
-    DOCKER_BUILDKIT=1 docker build --build-arg BASE_IMAGE=$ARM_BASE_IMAGE --target runtime --platform "$DOCKER_PLATFORM" -t ai-service:latest . 2>&1 | tee "$BUILD_LOG"
-    BUILD_STATUS=${PIPESTATUS[0]}
-    set -e  # 重新开启错误退出
-    
-    if [ $BUILD_STATUS -ne 0 ]; then
-        print_error "镜像构建失败"
-        print_info "查看详细错误信息:"
-        grep -iE "(error|warning|failed|失败|警告)" "$BUILD_LOG" | tail -20 || true
-        rm -f "$BUILD_LOG"
+    if ! build_with_cache ""; then
         exit 1
     fi
-    
-    rm -f "$BUILD_LOG"
     echo ""
     print_success "镜像构建完成！"
     
@@ -460,26 +553,11 @@ build_image() {
     
     print_info "架构: $ARCH, 平台: $DOCKER_PLATFORM, 基础镜像: $ARM_BASE_IMAGE"
     print_warning "重新构建可能需要较长时间（20-40分钟），请耐心等待..."
-    print_info "正在重新下载基础镜像和安装依赖..."
-    print_info "构建进度将实时显示，请勿中断..."
     echo ""
     
-    # 使用 docker build 命令构建镜像
-    BUILD_LOG="/tmp/docker_build_$$.log"
-    set +e  # 暂时关闭错误退出，以便捕获构建状态
-    DOCKER_BUILDKIT=1 docker build --build-arg BASE_IMAGE=$ARM_BASE_IMAGE --target runtime --platform "$DOCKER_PLATFORM" -t ai-service:latest --no-cache . 2>&1 | tee "$BUILD_LOG"
-    BUILD_STATUS=${PIPESTATUS[0]}
-    set -e  # 重新开启错误退出
-    
-    if [ $BUILD_STATUS -ne 0 ]; then
-        print_error "镜像构建失败"
-        print_info "查看详细错误信息:"
-        grep -iE "(error|warning|failed|失败|警告)" "$BUILD_LOG" | tail -20 || true
-        rm -f "$BUILD_LOG"
+    if ! build_with_cache "--no-cache"; then
         exit 1
     fi
-    
-    rm -f "$BUILD_LOG"
     echo ""
     print_success "镜像构建完成"
 }
@@ -516,33 +594,19 @@ update_service() {
     configure_architecture
     configure_arm_dockerfile
     check_network
+    prepare_cached_resources
     
     print_info "拉取最新代码..."
     git pull || print_warning "Git pull 失败，继续使用当前代码"
     
-    print_info "重新构建镜像..."
+    print_info "重新构建镜像（优先复用离线 pip 缓存）..."
     print_info "架构: $ARCH, 平台: $DOCKER_PLATFORM, 基础镜像: $ARM_BASE_IMAGE"
     print_warning "构建可能需要较长时间（20-40分钟），请耐心等待..."
-    print_info "正在构建镜像..."
-    print_info "构建进度将实时显示，请勿中断..."
     echo ""
     
-    # 使用 docker build 命令构建镜像
-    BUILD_LOG="/tmp/docker_build_$$.log"
-    set +e  # 暂时关闭错误退出，以便捕获构建状态
-    DOCKER_BUILDKIT=1 docker build --build-arg BASE_IMAGE=$ARM_BASE_IMAGE --target runtime --platform "$DOCKER_PLATFORM" -t ai-service:latest . 2>&1 | tee "$BUILD_LOG"
-    BUILD_STATUS=${PIPESTATUS[0]}
-    set -e  # 重新开启错误退出
-    
-    if [ $BUILD_STATUS -ne 0 ]; then
-        print_error "镜像构建失败"
-        print_info "查看详细错误信息:"
-        grep -iE "(error|warning|failed|失败|警告)" "$BUILD_LOG" | tail -20 || true
-        rm -f "$BUILD_LOG"
+    if ! build_with_cache ""; then
         exit 1
     fi
-    
-    rm -f "$BUILD_LOG"
     echo ""
     print_success "镜像构建完成！"
     

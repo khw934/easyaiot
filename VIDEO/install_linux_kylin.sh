@@ -33,6 +33,8 @@ NC='\033[0m' # No Color
 # 脚本目录
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+OFFLINE_CACHE_DIR="${SCRIPT_DIR}/.offline-cache"
+OFFLINE_PIP_CACHE_DIR="${OFFLINE_CACHE_DIR}/pip"
 
 # ARM架构基础镜像（针对麒麟系统）
 # 使用 ARM 版本的 PyTorch 镜像
@@ -54,6 +56,70 @@ print_warning() {
 
 print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
+}
+
+init_build_cache_dirs() {
+    mkdir -p "$OFFLINE_PIP_CACHE_DIR"
+    print_info "pip 离线缓存目录: $OFFLINE_PIP_CACHE_DIR"
+}
+
+prepare_cached_resources() {
+    mkdir -p "$OFFLINE_PIP_CACHE_DIR"
+    local cache_script="${SCRIPT_DIR}/cache_resources_arm.sh"
+
+    if find "$OFFLINE_PIP_CACHE_DIR" -maxdepth 1 -type f \( -name "*.whl" -o -name "*.tar.gz" -o -name "*.zip" \) | grep -q .; then
+        print_success "检测到本地 pip 离线缓存: $OFFLINE_PIP_CACHE_DIR"
+        return 0
+    fi
+
+    if [ "${AUTO_CACHE_PIP:-1}" != "1" ]; then
+        print_info "未检测到 pip 离线包，构建时将从网络下载"
+        return 0
+    fi
+
+    if [ ! -f "$cache_script" ]; then
+        print_warning "未找到 $cache_script"
+        return 0
+    fi
+
+    print_warning "未检测到 pip 离线包，自动执行 cache_resources_arm.sh..."
+    if [ -x "$cache_script" ]; then
+        ARM_BASE_IMAGE="${ARM_BASE_IMAGE:-pytorch/manylinuxaarch64-builder:cuda12.9}" "$cache_script" || true
+    else
+        /bin/bash "$cache_script" || true
+    fi
+}
+
+build_with_cache() {
+    local no_cache_flag="$1"
+    local build_log="/tmp/docker_build_kylin_$$.log"
+    local build_status=0
+
+    init_build_cache_dirs
+    mkdir -p .offline-cache/pip
+
+    print_info "使用 docker build（麒麟 ARM，离线 pip 缓存，BUILDKIT=0）..."
+    set +e
+    DOCKER_BUILDKIT=0 docker build \
+        --target runtime \
+        --platform "$DOCKER_PLATFORM" \
+        -t video-service:latest \
+        --pull=false \
+        --build-arg OFFLINE_MODE=${OFFLINE_MODE:-0} \
+        $no_cache_flag \
+        . 2>&1 | tee "$build_log"
+    build_status=${PIPESTATUS[0]}
+    set -e
+
+    if [ $build_status -ne 0 ]; then
+        print_error "镜像构建失败"
+        grep -iE "(error|warning|failed|失败|警告|exec format)" "$build_log" | tail -30 || true
+        rm -f "$build_log"
+        return 1
+    fi
+
+    rm -f "$build_log"
+    return 0
 }
 
 # 检查命令是否存在
@@ -417,42 +483,18 @@ install_service() {
     check_network
     create_directories
     create_env_file
+    prepare_cached_resources
     
-    print_info "构建 Docker 镜像（麒麟系统 ARM架构，根据代码重新构建）..."
+    print_info "构建 Docker 镜像（麒麟 ARM，优先复用离线 pip 缓存）..."
     print_info "架构: $ARCH, 平台: $DOCKER_PLATFORM, 基础镜像: $ARM_BASE_IMAGE"
     print_warning "首次构建可能需要较长时间（20-40分钟），请耐心等待..."
     print_info "正在下载基础镜像和安装依赖..."
     print_info "构建进度将实时显示，请勿中断..."
-    print_info "注意：使用 --platform 参数确保使用正确的架构..."
     echo ""
     
-    # 使用 docker build 命令构建镜像，明确指定平台为 linux/arm64
-    # 这是解决 "exec format error" 的关键
-    BUILD_LOG="/tmp/docker_build_kylin_$$.log"
-    set +e  # 暂时关闭错误退出，以便捕获构建状态
-    DOCKER_BUILDKIT=1 docker build \
-        --target runtime \
-        --platform "$DOCKER_PLATFORM" \
-        -t video-service:latest \
-        . 2>&1 | tee "$BUILD_LOG"
-    BUILD_STATUS=${PIPESTATUS[0]}
-    set -e  # 重新开启错误退出
-    
-    if [ $BUILD_STATUS -ne 0 ]; then
-        print_error "镜像构建失败"
-        print_info "查看详细错误信息:"
-        grep -iE "(error|warning|failed|失败|警告|exec format)" "$BUILD_LOG" | tail -30 || true
-        print_info ""
-        print_info "常见问题排查："
-        print_info "  1. 确保 Docker 支持多架构构建（Docker 19.03+）"
-        print_info "  2. 检查基础镜像是否存在 ARM 版本"
-        print_info "  3. 如果基础镜像不支持 ARM，请使用 Dockerfile.arm"
-        print_info "  4. 查看完整构建日志: cat $BUILD_LOG"
-        rm -f "$BUILD_LOG"
+    if ! build_with_cache ""; then
         exit 1
     fi
-    
-    rm -f "$BUILD_LOG"
     echo ""
     print_success "镜像构建完成！"
     
@@ -564,36 +606,11 @@ build_image() {
     print_warning "重新构建可能需要较长时间（20-40分钟），请耐心等待..."
     print_info "正在重新下载基础镜像和安装依赖..."
     print_info "构建进度将实时显示，请勿中断..."
-    print_info "注意：使用 --platform 参数确保使用正确的架构..."
     echo ""
     
-    # 使用 docker build 命令构建镜像，明确指定平台为 linux/arm64
-    BUILD_LOG="/tmp/docker_build_kylin_$$.log"
-    set +e  # 暂时关闭错误退出，以便捕获构建状态
-    DOCKER_BUILDKIT=1 docker build \
-        --target runtime \
-        --platform "$DOCKER_PLATFORM" \
-        -t video-service:latest \
-        --no-cache \
-        . 2>&1 | tee "$BUILD_LOG"
-    BUILD_STATUS=${PIPESTATUS[0]}
-    set -e  # 重新开启错误退出
-    
-    if [ $BUILD_STATUS -ne 0 ]; then
-        print_error "镜像构建失败"
-        print_info "查看详细错误信息:"
-        grep -iE "(error|warning|failed|失败|警告|exec format)" "$BUILD_LOG" | tail -30 || true
-        print_info ""
-        print_info "常见问题排查："
-        print_info "  1. 确保 Docker 支持多架构构建（Docker 19.03+）"
-        print_info "  2. 检查基础镜像是否存在 ARM 版本"
-        print_info "  3. 如果基础镜像不支持 ARM，请使用 Dockerfile.arm"
-        print_info "  4. 查看完整构建日志: cat $BUILD_LOG"
-        rm -f "$BUILD_LOG"
+    if ! build_with_cache "--no-cache"; then
         exit 1
     fi
-    
-    rm -f "$BUILD_LOG"
     echo ""
     print_success "镜像构建完成"
 }
@@ -630,6 +647,7 @@ update_service() {
     configure_kylin_dockerfile
     clean_compose_cache
     check_network
+    prepare_cached_resources
     
     print_info "拉取最新代码..."
     git pull || print_warning "Git pull 失败，继续使用当前代码"
@@ -639,35 +657,11 @@ update_service() {
     print_warning "构建可能需要较长时间（20-40分钟），请耐心等待..."
     print_info "正在构建镜像..."
     print_info "构建进度将实时显示，请勿中断..."
-    print_info "注意：使用 --platform 参数确保使用正确的架构..."
     echo ""
     
-    # 使用 docker build 命令构建镜像，明确指定平台为 linux/arm64
-    BUILD_LOG="/tmp/docker_build_kylin_$$.log"
-    set +e  # 暂时关闭错误退出，以便捕获构建状态
-    DOCKER_BUILDKIT=1 docker build \
-        --target runtime \
-        --platform "$DOCKER_PLATFORM" \
-        -t video-service:latest \
-        . 2>&1 | tee "$BUILD_LOG"
-    BUILD_STATUS=${PIPESTATUS[0]}
-    set -e  # 重新开启错误退出
-    
-    if [ $BUILD_STATUS -ne 0 ]; then
-        print_error "镜像构建失败"
-        print_info "查看详细错误信息:"
-        grep -iE "(error|warning|failed|失败|警告|exec format)" "$BUILD_LOG" | tail -30 || true
-        print_info ""
-        print_info "常见问题排查："
-        print_info "  1. 确保 Docker 支持多架构构建（Docker 19.03+）"
-        print_info "  2. 检查基础镜像是否存在 ARM 版本"
-        print_info "  3. 如果基础镜像不支持 ARM，请使用 Dockerfile.arm"
-        print_info "  4. 查看完整构建日志: cat $BUILD_LOG"
-        rm -f "$BUILD_LOG"
+    if ! build_with_cache ""; then
         exit 1
     fi
-    
-    rm -f "$BUILD_LOG"
     echo ""
     print_success "镜像构建完成！"
     

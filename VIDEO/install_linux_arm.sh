@@ -34,6 +34,9 @@ cd "$SCRIPT_DIR"
 # ARM架构基础镜像
 ARM_BASE_IMAGE="pytorch/manylinuxaarch64-builder:cuda12.9"
 DOCKER_PLATFORM="linux/arm64"
+OFFLINE_CACHE_DIR="${SCRIPT_DIR}/.offline-cache"
+OFFLINE_DOCKER_CACHE_DIR="${OFFLINE_CACHE_DIR}/docker"
+OFFLINE_PIP_CACHE_DIR="${OFFLINE_CACHE_DIR}/pip"
 
 # 打印带颜色的消息
 print_info() {
@@ -50,6 +53,167 @@ print_warning() {
 
 print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
+}
+
+init_build_cache_dirs() {
+    mkdir -p "$OFFLINE_DOCKER_CACHE_DIR" "$OFFLINE_PIP_CACHE_DIR"
+    print_info "pip 离线缓存目录: $OFFLINE_PIP_CACHE_DIR"
+}
+
+image_to_tar_name() {
+    echo "$1" | sed 's#[/:]#_#g'
+}
+
+is_image_available_offline() {
+    local image="$1"
+    local image_tar="$2"
+    if [ -f "$image_tar" ]; then
+        return 0
+    fi
+    if docker image inspect "$image" > /dev/null 2>&1; then
+        return 0
+    fi
+    return 1
+}
+
+try_import_cached_image() {
+    local image="$1"
+    local image_tar="$2"
+
+    if docker image inspect "$image" > /dev/null 2>&1; then
+        print_info "本地已存在镜像: $image"
+        return 0
+    fi
+
+    if [ -f "$image_tar" ]; then
+        print_info "导入本地离线镜像: $image_tar"
+        if docker load -i "$image_tar" > /dev/null; then
+            print_success "镜像导入成功: $image"
+            return 0
+        fi
+        print_warning "镜像导入失败，后续将尝试在线拉取: $image"
+    else
+        print_info "未找到本地离线镜像: $image_tar"
+    fi
+    return 1
+}
+
+prepare_cached_resources() {
+    mkdir -p "$OFFLINE_DOCKER_CACHE_DIR" "$OFFLINE_PIP_CACHE_DIR"
+
+    local base_tar="${OFFLINE_DOCKER_CACHE_DIR}/$(image_to_tar_name "$ARM_BASE_IMAGE").tar"
+    local cache_script="${SCRIPT_DIR}/cache_resources_arm.sh"
+    local need_prefetch=0
+
+    if ! is_image_available_offline "$ARM_BASE_IMAGE" "$base_tar"; then
+        need_prefetch=1
+    fi
+    if ! find "$OFFLINE_PIP_CACHE_DIR" -maxdepth 1 -type f \( -name "*.whl" -o -name "*.tar.gz" -o -name "*.zip" \) | grep -q .; then
+        need_prefetch=1
+    fi
+
+    local py_tag=""
+    if grep -Eq '^torch([<>= ].*)?$' requirements.txt 2>/dev/null; then
+        py_tag=$(docker run --rm "$ARM_BASE_IMAGE" /bin/bash -lc "if [ -x /opt/python/cp311-cp311/bin/python3.11 ]; then /opt/python/cp311-cp311/bin/python3.11 -c 'import sys; print(\"cp{}{}\".format(sys.version_info.major, sys.version_info.minor))'; elif [ -x /opt/python/cp310-cp310/bin/python3.10 ]; then /opt/python/cp310-cp310/bin/python3.10 -c 'import sys; print(\"cp{}{}\".format(sys.version_info.major, sys.version_info.minor))'; elif command -v python3 >/dev/null 2>&1; then python3 -c 'import sys; print(\"cp{}{}\".format(sys.version_info.major, sys.version_info.minor))'; else echo ''; fi" 2>/dev/null || echo "")
+        if [ -n "$py_tag" ] && find "$OFFLINE_PIP_CACHE_DIR" -maxdepth 1 -type f -name "torch-*.whl" | grep -q .; then
+            if ! find "$OFFLINE_PIP_CACHE_DIR" -maxdepth 1 -type f -name "torch-*-${py_tag}-*.whl" | grep -q .; then
+                print_warning "检测到离线 pip 包 ABI 不匹配（目标: ${py_tag}），将自动清理并重新下载..."
+                rm -f "$OFFLINE_PIP_CACHE_DIR"/*
+                need_prefetch=1
+            fi
+        fi
+    fi
+
+    if [ $need_prefetch -eq 1 ]; then
+        if [ -x "$cache_script" ]; then
+            print_warning "检测到本地离线资源不完整，先自动执行 cache_resources_arm.sh 进行预下载（首次会较慢）..."
+            if "$cache_script"; then
+                print_success "预缓存完成，继续安装流程"
+            else
+                print_warning "预缓存脚本执行失败，继续按现有本地资源/网络环境执行"
+            fi
+        else
+            print_warning "未找到可执行的预缓存脚本: $cache_script"
+            print_info "可手动执行: chmod +x cache_resources_arm.sh && ./cache_resources_arm.sh"
+        fi
+    fi
+
+    print_info "检查并导入本地离线镜像（如存在）..."
+    try_import_cached_image "$ARM_BASE_IMAGE" "$base_tar" || true
+
+    mkdir -p "$OFFLINE_PIP_CACHE_DIR"
+    if find "$OFFLINE_PIP_CACHE_DIR" -maxdepth 1 -type f \( -name "*.whl" -o -name "*.tar.gz" -o -name "*.zip" \) | grep -q .; then
+        print_success "检测到本地 pip 资源缓存目录: $OFFLINE_PIP_CACHE_DIR"
+    else
+        print_info "未检测到本地 pip 资源缓存，构建时将从网络下载"
+    fi
+}
+
+optimize_dockerfile_pip_cache() {
+    local dockerfile_path="$1"
+    if [ ! -f "$dockerfile_path" ]; then
+        return 0
+    fi
+
+    if grep -q -- "--no-cache-dir" "$dockerfile_path"; then
+        print_info "优化 ${dockerfile_path} 的 pip 缓存配置（移除 --no-cache-dir）..."
+        sed -i 's/ --no-cache-dir//g' "$dockerfile_path"
+        print_success "${dockerfile_path} 已启用 pip 缓存复用"
+    fi
+}
+
+build_with_cache() {
+    local no_cache_flag="$1"
+    local build_log="/tmp/docker_build_$$.log"
+    local build_status=0
+    local cache_opts=""
+    local max_retries=3
+    local attempt=1
+
+    init_build_cache_dirs
+    mkdir -p .offline-cache/pip
+    optimize_dockerfile_pip_cache Dockerfile
+    optimize_dockerfile_pip_cache Dockerfile.arm
+
+    cache_opts="--build-arg OFFLINE_MODE=${OFFLINE_MODE:-0}"
+    print_info "使用 docker build（ARM 离线 pip 缓存加速，BUILDKIT=0）..."
+    while [ $attempt -le $max_retries ]; do
+        print_info "执行构建（第 ${attempt}/${max_retries} 次）..."
+        set +e
+        DOCKER_BUILDKIT=0 docker build \
+            --target runtime \
+            --platform "$DOCKER_PLATFORM" \
+            -t video-service:latest \
+            --pull=false \
+            $cache_opts \
+            $no_cache_flag \
+            . 2>&1 | tee "$build_log"
+        build_status=${PIPESTATUS[0]}
+        set -e
+
+        if [ $build_status -eq 0 ]; then
+            break
+        fi
+
+        if grep -qiE "(failed to fetch anonymous token|dial tcp .*:443: i/o timeout|DeadlineExceeded|failed to resolve source metadata)" "$build_log" && [ $attempt -lt $max_retries ]; then
+            print_warning "检测到访问 Docker Hub 超时，10 秒后自动重试..."
+            sleep 10
+            attempt=$((attempt + 1))
+            continue
+        fi
+
+        break
+    done
+
+    if [ $build_status -ne 0 ]; then
+        print_error "镜像构建失败"
+        grep -iE "(error|warning|failed|失败|警告)" "$build_log" | tail -20 || true
+        rm -f "$build_log"
+        return 1
+    fi
+
+    rm -f "$build_log"
+    return 0
 }
 
 # 检查命令是否存在
@@ -188,6 +352,9 @@ configure_arm_dockerfile() {
     
     # 检查本地是否有 ffmpeg 文件
     check_local_ffmpeg
+
+    optimize_dockerfile_pip_cache Dockerfile
+    optimize_dockerfile_pip_cache Dockerfile.arm
 }
 
 # 恢复原始 Dockerfile（可选）
@@ -433,33 +600,20 @@ install_service() {
     check_network
     create_directories
     create_env_file
+    prepare_cached_resources
     
     # 检查本地 ffmpeg 文件
     check_local_ffmpeg
     
-    print_info "构建 Docker 镜像（ARM架构，根据代码重新构建）..."
+    print_info "构建 Docker 镜像（ARM架构，优先复用离线 pip 缓存）..."
     print_info "架构: $ARCH, 平台: $DOCKER_PLATFORM, 基础镜像: $ARM_BASE_IMAGE"
     print_warning "首次构建可能需要较长时间（20-40分钟），请耐心等待..."
-    print_info "正在下载基础镜像和安装依赖..."
     print_info "构建进度将实时显示，请勿中断..."
     echo ""
     
-    # 使用 docker build 命令构建镜像（install 时总是重新构建）
-    BUILD_LOG="/tmp/docker_build_$$.log"
-    set +e  # 暂时关闭错误退出，以便捕获构建状态
-    DOCKER_BUILDKIT=1 docker build --target runtime --platform "$DOCKER_PLATFORM" -t video-service:latest . 2>&1 | tee "$BUILD_LOG"
-    BUILD_STATUS=${PIPESTATUS[0]}
-    set -e  # 重新开启错误退出
-    
-    if [ $BUILD_STATUS -ne 0 ]; then
-        print_error "镜像构建失败"
-        print_info "查看详细错误信息:"
-        grep -iE "(error|warning|failed|失败|警告)" "$BUILD_LOG" | tail -20 || true
-        rm -f "$BUILD_LOG"
+    if ! build_with_cache ""; then
         exit 1
     fi
-    
-    rm -f "$BUILD_LOG"
     echo ""
     print_success "镜像构建完成！"
     
@@ -581,26 +735,12 @@ build_image() {
     
     print_info "架构: $ARCH, 平台: $DOCKER_PLATFORM, 基础镜像: $ARM_BASE_IMAGE"
     print_warning "重新构建可能需要较长时间（20-40分钟），请耐心等待..."
-    print_info "正在重新下载基础镜像和安装依赖..."
     print_info "构建进度将实时显示，请勿中断..."
     echo ""
     
-    # 使用 docker build 命令构建镜像
-    BUILD_LOG="/tmp/docker_build_$$.log"
-    set +e  # 暂时关闭错误退出，以便捕获构建状态
-    DOCKER_BUILDKIT=1 docker build --target runtime --platform "$DOCKER_PLATFORM" -t video-service:latest --no-cache . 2>&1 | tee "$BUILD_LOG"
-    BUILD_STATUS=${PIPESTATUS[0]}
-    set -e  # 重新开启错误退出
-    
-    if [ $BUILD_STATUS -ne 0 ]; then
-        print_error "镜像构建失败"
-        print_info "查看详细错误信息:"
-        grep -iE "(error|warning|failed|失败|警告)" "$BUILD_LOG" | tail -20 || true
-        rm -f "$BUILD_LOG"
+    if ! build_with_cache "--no-cache"; then
         exit 1
     fi
-    
-    rm -f "$BUILD_LOG"
     echo ""
     print_success "镜像构建完成"
     
@@ -646,6 +786,7 @@ update_service() {
     configure_arm_dockerfile
     clean_compose_cache
     check_network
+    prepare_cached_resources
     
     # 检查本地 ffmpeg 文件
     check_local_ffmpeg
@@ -653,29 +794,14 @@ update_service() {
     print_info "拉取最新代码..."
     git pull || print_warning "Git pull 失败，继续使用当前代码"
     
-    print_info "重新构建镜像..."
+    print_info "重新构建镜像（优先复用离线 pip 缓存）..."
     print_info "架构: $ARCH, 平台: $DOCKER_PLATFORM, 基础镜像: $ARM_BASE_IMAGE"
     print_warning "构建可能需要较长时间（20-40分钟），请耐心等待..."
-    print_info "正在构建镜像..."
-    print_info "构建进度将实时显示，请勿中断..."
     echo ""
     
-    # 使用 docker build 命令构建镜像
-    BUILD_LOG="/tmp/docker_build_$$.log"
-    set +e  # 暂时关闭错误退出，以便捕获构建状态
-    DOCKER_BUILDKIT=1 docker build --target runtime --platform "$DOCKER_PLATFORM" -t video-service:latest . 2>&1 | tee "$BUILD_LOG"
-    BUILD_STATUS=${PIPESTATUS[0]}
-    set -e  # 重新开启错误退出
-    
-    if [ $BUILD_STATUS -ne 0 ]; then
-        print_error "镜像构建失败"
-        print_info "查看详细错误信息:"
-        grep -iE "(error|warning|failed|失败|警告)" "$BUILD_LOG" | tail -20 || true
-        rm -f "$BUILD_LOG"
+    if ! build_with_cache ""; then
         exit 1
     fi
-    
-    rm -f "$BUILD_LOG"
     echo ""
     print_success "镜像构建完成！"
     

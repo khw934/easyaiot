@@ -31,9 +31,12 @@ NC='\033[0m' # No Color
 # 脚本目录
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+OFFLINE_CACHE_DIR="${SCRIPT_DIR}/.offline-cache"
+OFFLINE_PIP_CACHE_DIR="${OFFLINE_CACHE_DIR}/pip"
 
 # 标注平台目录
 AUTO_LABELING_DIR="$SCRIPT_DIR/services/auto-labeling"
+AL_OFFLINE_PIP_CACHE_DIR="${AUTO_LABELING_DIR}/.offline-cache/pip"
 
 # 打印带颜色的消息
 print_info() {
@@ -50,6 +53,127 @@ print_warning() {
 
 print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
+}
+
+init_build_cache_dirs() {
+    mkdir -p "$OFFLINE_PIP_CACHE_DIR"
+    print_info "pip 离线缓存目录: $OFFLINE_PIP_CACHE_DIR"
+}
+
+prepare_cached_resources() {
+    mkdir -p "$OFFLINE_PIP_CACHE_DIR"
+    local cache_script="${SCRIPT_DIR}/cache_resources.sh"
+
+    if find "$OFFLINE_PIP_CACHE_DIR" -maxdepth 1 -type f \( -name "*.whl" -o -name "*.tar.gz" -o -name "*.zip" \) | grep -q .; then
+        print_success "检测到本地 pip 离线缓存: $OFFLINE_PIP_CACHE_DIR"
+        return 0
+    fi
+
+    if [ "${AUTO_CACHE_PIP:-1}" != "1" ]; then
+        print_info "未检测到 pip 离线包，构建时将从网络下载"
+        return 0
+    fi
+
+    if [ ! -f "$cache_script" ]; then
+        print_warning "未找到 $cache_script"
+        return 0
+    fi
+
+    print_warning "未检测到 pip 离线包，自动执行 cache_resources.sh..."
+    if [ -x "$cache_script" ]; then
+        BASE_IMAGE="${BASE_IMAGE:-pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel}" "$cache_script" || true
+    else
+        BASE_IMAGE="${BASE_IMAGE:-pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel}" /bin/bash "$cache_script" || true
+    fi
+}
+
+prepare_auto_labeling_cached_resources() {
+    mkdir -p "$AL_OFFLINE_PIP_CACHE_DIR"
+    local cache_script="${AUTO_LABELING_DIR}/cache_resources.sh"
+
+    if find "$AL_OFFLINE_PIP_CACHE_DIR" -maxdepth 1 -type f \( -name "*.whl" -o -name "*.tar.gz" -o -name "*.zip" \) | grep -q .; then
+        return 0
+    fi
+
+    if [ "${AUTO_CACHE_PIP:-1}" != "1" ] || [ ! -f "$cache_script" ]; then
+        return 0
+    fi
+
+    print_info "标注平台：自动执行 cache_resources.sh..."
+    if [ -x "$cache_script" ]; then
+        "$cache_script" || true
+    else
+        /bin/bash "$cache_script" || true
+    fi
+}
+
+build_with_cache() {
+    local no_cache_flag="$1"
+    local build_log="/tmp/docker_build_$$.log"
+    local build_status=0
+    local cache_opts="--build-arg OFFLINE_MODE=${OFFLINE_MODE:-0}"
+    local platform_opts=""
+
+    init_build_cache_dirs
+    mkdir -p .offline-cache/pip
+
+    if [ -n "${DOCKER_PLATFORM:-}" ]; then
+        platform_opts="--platform $DOCKER_PLATFORM"
+    fi
+
+    print_info "使用 docker build（离线 pip 缓存，BUILDKIT=0）..."
+    set +e
+    DOCKER_BUILDKIT=0 docker build \
+        --build-arg BASE_IMAGE="${BASE_IMAGE:-pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel}" \
+        --target runtime \
+        $platform_opts \
+        -t ai-service:latest \
+        --pull=false \
+        $cache_opts \
+        $no_cache_flag \
+        . 2>&1 | tee "$build_log"
+    build_status=${PIPESTATUS[0]}
+    set -e
+
+    if [ $build_status -ne 0 ]; then
+        print_error "AI 服务镜像构建失败"
+        grep -iE "(error|warning|failed|失败|警告)" "$build_log" | tail -20 || true
+        rm -f "$build_log"
+        return 1
+    fi
+
+    rm -f "$build_log"
+    return 0
+}
+
+build_auto_labeling_with_cache() {
+    local no_cache_flag="$1"
+    local build_log="/tmp/docker_build_auto_labeling_$$.log"
+    local build_status=0
+
+    mkdir -p "${AUTO_LABELING_DIR}/.offline-cache/pip"
+    prepare_auto_labeling_cached_resources
+
+    print_info "构建标注平台镜像（离线 pip 缓存，BUILDKIT=0）..."
+    set +e
+    DOCKER_BUILDKIT=0 docker build \
+        -t auto-labeling:latest \
+        --pull=false \
+        --build-arg OFFLINE_MODE=${OFFLINE_MODE:-0} \
+        $no_cache_flag \
+        "$AUTO_LABELING_DIR" 2>&1 | tee "$build_log"
+    build_status=${PIPESTATUS[0]}
+    set -e
+
+    if [ $build_status -ne 0 ]; then
+        print_error "标注平台镜像构建失败"
+        grep -iE "(error|warning|failed|失败|警告)" "$build_log" | tail -20 || true
+        rm -f "$build_log"
+        return 1
+    fi
+
+    rm -f "$build_log"
+    return 0
 }
 
 # 检查命令是否存在
@@ -572,24 +696,15 @@ build_auto_labeling_image() {
     done
     mkdir -p "$AUTO_LABELING_DIR/static/annotations"
 
-    print_info "构建标注平台 Docker 镜像..."
-    BUILD_LOG="/tmp/docker_build_auto_labeling_$$.log"
-    set +e
+    local no_cache_flag=""
     if [ -n "$no_cache" ]; then
-        docker build --no-cache -t auto-labeling:latest "$AUTO_LABELING_DIR" 2>&1 | tee "$BUILD_LOG"
-    else
-        docker build -t auto-labeling:latest "$AUTO_LABELING_DIR" 2>&1 | tee "$BUILD_LOG"
+        no_cache_flag="--no-cache"
     fi
-    BUILD_STATUS=${PIPESTATUS[0]}
-    set -e
 
-    if [ $BUILD_STATUS -ne 0 ]; then
-        print_error "标注平台镜像构建失败"
-        grep -iE "(error|warning|failed|失败|警告)" "$BUILD_LOG" | tail -20 || true
-        rm -f "$BUILD_LOG"
+    print_info "构建标注平台 Docker 镜像（优先复用本地缓存）..."
+    if ! build_auto_labeling_with_cache "$no_cache_flag"; then
         exit 1
     fi
-    rm -f "$BUILD_LOG"
     print_success "标注平台镜像构建完成"
 }
 
@@ -607,30 +722,18 @@ install_service() {
     create_directories
     create_env_file
     create_auto_labeling_env_file
+    prepare_cached_resources
     
-    print_info "构建 Docker 镜像（根据代码重新构建）..."
+    print_info "构建 Docker 镜像（优先复用离线 pip 缓存）..."
     print_info "架构: $ARCH, 平台: $DOCKER_PLATFORM, 基础镜像: $BASE_IMAGE"
     print_warning "首次构建可能需要较长时间（10-30分钟），请耐心等待..."
     print_info "正在下载基础镜像和安装依赖..."
     print_info "构建进度将实时显示，请勿中断..."
     echo ""
     
-    # 使用 docker build 命令构建镜像（install 时总是重新构建）
-    BUILD_LOG="/tmp/docker_build_$$.log"
-    set +e  # 暂时关闭错误退出，以便捕获构建状态
-    docker build --build-arg BASE_IMAGE=$BASE_IMAGE --target runtime -t ai-service:latest . 2>&1 | tee "$BUILD_LOG"
-    BUILD_STATUS=${PIPESTATUS[0]}
-    set -e  # 重新开启错误退出
-    
-    if [ $BUILD_STATUS -ne 0 ]; then
-        print_error "镜像构建失败"
-        print_info "查看详细错误信息:"
-        grep -iE "(error|warning|failed|失败|警告)" "$BUILD_LOG" | tail -20 || true
-        rm -f "$BUILD_LOG"
+    if ! build_with_cache ""; then
         exit 1
     fi
-    
-    rm -f "$BUILD_LOG"
     echo ""
     print_success "AI 服务镜像构建完成！"
 
@@ -753,22 +856,9 @@ build_image() {
     print_info "构建进度将实时显示，请勿中断..."
     echo ""
     
-    # 使用 docker build 命令构建镜像
-    BUILD_LOG="/tmp/docker_build_$$.log"
-    set +e  # 暂时关闭错误退出，以便捕获构建状态
-    docker build --build-arg BASE_IMAGE=$BASE_IMAGE --target runtime -t ai-service:latest --no-cache . 2>&1 | tee "$BUILD_LOG"
-    BUILD_STATUS=${PIPESTATUS[0]}
-    set -e  # 重新开启错误退出
-    
-    if [ $BUILD_STATUS -ne 0 ]; then
-        print_error "镜像构建失败"
-        print_info "查看详细错误信息:"
-        grep -iE "(error|warning|failed|失败|警告)" "$BUILD_LOG" | tail -20 || true
-        rm -f "$BUILD_LOG"
+    if ! build_with_cache "--no-cache"; then
         exit 1
     fi
-    
-    rm -f "$BUILD_LOG"
     echo ""
     print_success "AI 服务镜像构建完成"
     build_auto_labeling_image "no-cache"
@@ -804,33 +894,21 @@ update_service() {
     configure_architecture
     check_network
     create_auto_labeling_env_file
+    prepare_cached_resources
     
     print_info "拉取最新代码..."
     git pull || print_warning "Git pull 失败，继续使用当前代码"
     
-    print_info "重新构建镜像..."
+    print_info "重新构建镜像（优先复用离线 pip 缓存）..."
     print_info "架构: $ARCH, 平台: $DOCKER_PLATFORM, 基础镜像: $BASE_IMAGE"
     print_warning "构建可能需要较长时间（10-30分钟），请耐心等待..."
     print_info "正在构建镜像..."
     print_info "构建进度将实时显示，请勿中断..."
     echo ""
     
-    # 使用 docker build 命令构建镜像
-    BUILD_LOG="/tmp/docker_build_$$.log"
-    set +e  # 暂时关闭错误退出，以便捕获构建状态
-    docker build --build-arg BASE_IMAGE=$BASE_IMAGE --target runtime -t ai-service:latest . 2>&1 | tee "$BUILD_LOG"
-    BUILD_STATUS=${PIPESTATUS[0]}
-    set -e  # 重新开启错误退出
-    
-    if [ $BUILD_STATUS -ne 0 ]; then
-        print_error "镜像构建失败"
-        print_info "查看详细错误信息:"
-        grep -iE "(error|warning|failed|失败|警告)" "$BUILD_LOG" | tail -20 || true
-        rm -f "$BUILD_LOG"
+    if ! build_with_cache ""; then
         exit 1
     fi
-    
-    rm -f "$BUILD_LOG"
     echo ""
     print_success "AI 服务镜像构建完成！"
 

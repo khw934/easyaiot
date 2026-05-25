@@ -167,11 +167,33 @@ FROM python-env AS python-deps
 
 # 复制requirements文件（利用Docker缓存层）
 COPY requirements.txt .
+COPY .offline-cache/pip /opt/offline-pip
+ARG OFFLINE_MODE=0
 
-# 升级 pip 并安装 Python 依赖
+# 升级 pip 并安装 Python 依赖（优先使用 .offline-cache/pip 离线包）
 RUN set -ex && \
-    pip3 install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple && \
-    pip3 install -r requirements.txt --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple
+    if [ -n "$(find /opt/offline-pip -maxdepth 1 -type f 2>/dev/null)" ]; then \
+        py_tag="$(python3 -c 'import sys; print("cp{}{}".format(sys.version_info.major, sys.version_info.minor))')" && \
+        if grep -Eq '^torch([<>= ].*)?$' requirements.txt; then \
+            if ls /opt/offline-pip/torch-*.whl >/dev/null 2>&1; then \
+                if ! ls /opt/offline-pip/torch-*-"${py_tag}"-*.whl >/dev/null 2>&1; then \
+                    echo "离线包 ABI 不匹配：当前 Python 标签为 ${py_tag}，但 /opt/offline-pip 中未找到对应 torch wheel" && \
+                    echo "请重新执行 ./cache_resources_arm.sh 生成匹配离线包，或清理 .offline-cache/pip 后重试" && \
+                    ls -1 /opt/offline-pip/torch-*.whl || true && \
+                    exit 1; \
+                fi; \
+            fi; \
+        fi && \
+        echo "检测到本地离线 pip 资源，优先离线安装..." && \
+        pip3 install -r requirements.txt --no-index --find-links /opt/offline-pip; \
+    elif [ "$OFFLINE_MODE" = "1" ]; then \
+        echo "OFFLINE_MODE=1 且未检测到离线 pip 资源，请先执行 cache_resources_arm.sh 准备 .offline-cache/pip" && \
+        exit 1; \
+    else \
+        echo "未检测到离线 pip 资源，使用在线源安装..." && \
+        pip3 install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple && \
+        pip3 install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple; \
+    fi
 
 # ======================= 第四阶段：应用部署 =======================
 FROM python-deps AS runtime

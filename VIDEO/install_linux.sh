@@ -30,6 +30,8 @@ NC='\033[0m' # No Color
 # 脚本目录
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+OFFLINE_CACHE_DIR="${SCRIPT_DIR}/.offline-cache"
+OFFLINE_PIP_CACHE_DIR="${OFFLINE_CACHE_DIR}/pip"
 
 # 打印带颜色的消息
 print_info() {
@@ -46,6 +48,72 @@ print_warning() {
 
 print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
+}
+
+init_build_cache_dirs() {
+    mkdir -p "$OFFLINE_PIP_CACHE_DIR"
+    print_info "pip 离线缓存目录: $OFFLINE_PIP_CACHE_DIR"
+}
+
+prepare_cached_resources() {
+    mkdir -p "$OFFLINE_PIP_CACHE_DIR"
+    local cache_script="${SCRIPT_DIR}/cache_resources.sh"
+
+    if find "$OFFLINE_PIP_CACHE_DIR" -maxdepth 1 -type f \( -name "*.whl" -o -name "*.tar.gz" -o -name "*.zip" \) | grep -q .; then
+        print_success "检测到本地 pip 离线缓存: $OFFLINE_PIP_CACHE_DIR"
+        return 0
+    fi
+
+    if [ "${AUTO_CACHE_PIP:-1}" != "1" ]; then
+        print_info "未检测到 pip 离线包，构建时将从网络下载（AUTO_CACHE_PIP=0）"
+        print_info "可提前执行: ./cache_resources.sh"
+        return 0
+    fi
+
+    if [ ! -f "$cache_script" ]; then
+        print_warning "未找到 $cache_script，构建时将从网络下载"
+        return 0
+    fi
+
+    print_warning "未检测到 pip 离线包，自动执行 cache_resources.sh（首次较慢）..."
+    if [ -x "$cache_script" ]; then
+        "$cache_script" || print_warning "预缓存失败，构建时将尝试在线安装"
+    else
+        /bin/bash "$cache_script" || print_warning "预缓存失败，构建时将尝试在线安装"
+    fi
+}
+
+# 使用离线 pip 缓存构建（不依赖 Docker 层/buildx 缓存）
+build_with_cache() {
+    local no_cache_flag="$1"
+    local build_log="/tmp/docker_build_$$.log"
+    local build_status=0
+    local cache_opts="--build-arg OFFLINE_MODE=${OFFLINE_MODE:-0}"
+
+    init_build_cache_dirs
+    mkdir -p .offline-cache/pip
+
+    print_info "使用 docker build（离线 pip 缓存，BUILDKIT=0，不使用层缓存）..."
+    set +e
+    DOCKER_BUILDKIT=0 docker build \
+        --target runtime \
+        -t video-service:latest \
+        --pull=false \
+        $cache_opts \
+        $no_cache_flag \
+        . 2>&1 | tee "$build_log"
+    build_status=${PIPESTATUS[0]}
+    set -e
+
+    if [ $build_status -ne 0 ]; then
+        print_error "镜像构建失败"
+        grep -iE "(error|warning|failed|失败|警告)" "$build_log" | tail -20 || true
+        rm -f "$build_log"
+        return 1
+    fi
+
+    rm -f "$build_log"
+    return 0
 }
 
 # 检查命令是否存在
@@ -320,9 +388,12 @@ install_service() {
     check_network
     create_directories
     create_env_file
+    prepare_cached_resources
     
-    print_info "构建 Docker 镜像（根据代码重新构建）..."
-    docker build --target runtime -t video-service:latest .
+    print_info "构建 Docker 镜像（优先复用离线 pip 缓存）..."
+    if ! build_with_cache ""; then
+        exit 1
+    fi
     
     print_info "启动服务..."
     $COMPOSE_CMD up -d
@@ -422,7 +493,9 @@ build_image() {
     check_docker
     check_docker_compose
     
-    docker build --target runtime -t video-service:latest --no-cache .
+    if ! build_with_cache "--no-cache"; then
+        exit 1
+    fi
     print_success "镜像构建完成"
 }
 
@@ -457,8 +530,11 @@ update_service() {
     print_info "拉取最新代码..."
     git pull || print_warning "Git pull 失败，继续使用当前代码"
     
-    print_info "重新构建镜像..."
-    docker build --target runtime -t video-service:latest .
+    prepare_cached_resources
+    print_info "重新构建镜像（优先复用离线 pip 缓存）..."
+    if ! build_with_cache ""; then
+        exit 1
+    fi
     
     print_info "重启服务..."
     $COMPOSE_CMD up -d
