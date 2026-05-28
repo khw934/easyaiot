@@ -59,13 +59,13 @@
                       <template #icon>
                         <SearchOutlined/>
                       </template>
-                      通过网段注册摄像头
+                      跨网段扫描并注册摄像头
                     </a-button>
                     <a-button @click="handleScanSegmentNvr">
                       <template #icon>
                         <ClusterOutlined/>
                       </template>
-                      通过网段注册NVR
+                      跨网段扫描并注册NVR
                     </a-button>
                     <a-button @click="openAddModal('source')">
                       <template #icon>
@@ -177,13 +177,13 @@
                       <template #icon>
                         <SearchOutlined/>
                       </template>
-                      通过网段注册摄像头
+                      跨网段扫描并注册摄像头
                     </a-button>
                     <a-button @click="handleScanSegmentNvr">
                       <template #icon>
                         <ClusterOutlined/>
                       </template>
-                      通过网段注册NVR
+                      跨网段扫描并注册NVR
                     </a-button>
                     <a-button @click="openAddModal('source')">
                       <template #icon>
@@ -308,7 +308,7 @@ const [registerSegmentScanModal, { openDrawer: openSegmentScanModal, setDrawerPr
 
 function openSegmentScanDrawer(mode: 'camera' | 'nvr') {
   setSegmentScanDrawerProps({
-    title: mode === 'nvr' ? '通过网段注册 NVR' : '通过网段注册摄像头',
+    title: mode === 'nvr' ? '跨网段扫描并注册 NVR' : '跨网段扫描并注册摄像头',
   });
   openSegmentScanModal(true, { mode });
 }

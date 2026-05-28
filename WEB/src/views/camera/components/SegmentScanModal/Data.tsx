@@ -6,11 +6,13 @@ export function getCameraScanColumns(): BasicColumn[] {
     { title: '端口', dataIndex: 'port', width: 70 },
     { title: '品牌', dataIndex: 'vendor_label', width: 90 },
     { title: '角色', dataIndex: 'role_label', width: 90 },
-    { title: '型号', dataIndex: 'model', width: 140, ellipsis: true },
-    { title: '名称', dataIndex: 'device_name', width: 140, ellipsis: true },
-    { title: 'MAC', dataIndex: 'mac', width: 140, ellipsis: true },
-    { title: 'RTSP', dataIndex: 'rtsp_url', width: 280, ellipsis: true },
-    { title: '操作', dataIndex: 'action', width: 90, fixed: 'right' },
+    { title: '认证用户', dataIndex: 'auth_username', width: 100 },
+    { title: '型号', dataIndex: 'model', width: 120, ellipsis: true },
+    { title: '名称', dataIndex: 'device_name', width: 120, ellipsis: true },
+    { title: 'MAC', dataIndex: 'mac', width: 130, ellipsis: true },
+    { title: 'RTSP', dataIndex: 'rtsp_url', width: 220, ellipsis: true },
+    { title: '状态', dataIndex: 'register_status', width: 90 },
+    { title: '操作', dataIndex: 'action', width: 80, fixed: 'right' },
   ];
 }
 
@@ -20,9 +22,11 @@ export function getNvrScanColumns(): BasicColumn[] {
     { title: '端口', dataIndex: 'port', width: 70 },
     { title: '品牌', dataIndex: 'vendor_label', width: 90 },
     { title: '角色', dataIndex: 'role_label', width: 90 },
-    { title: '型号', dataIndex: 'model', width: 150, ellipsis: true },
-    { title: '名称', dataIndex: 'device_name', width: 150, ellipsis: true },
-    { title: 'RTSP', dataIndex: 'rtsp_url', width: 280, ellipsis: true },
-    { title: '操作', dataIndex: 'action', width: 120, fixed: 'right' },
+    { title: '认证用户', dataIndex: 'auth_username', width: 100 },
+    { title: '型号', dataIndex: 'model', width: 130, ellipsis: true },
+    { title: '名称', dataIndex: 'device_name', width: 130, ellipsis: true },
+    { title: 'RTSP', dataIndex: 'rtsp_url', width: 220, ellipsis: true },
+    { title: '状态', dataIndex: 'register_status', width: 90 },
+    { title: '操作', dataIndex: 'action', width: 130, fixed: 'right' },
   ];
 }
