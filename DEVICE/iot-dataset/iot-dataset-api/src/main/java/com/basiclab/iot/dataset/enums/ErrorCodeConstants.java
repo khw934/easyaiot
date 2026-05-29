@@ -22,6 +22,9 @@ public interface ErrorCodeConstants {
     ErrorCode FILE_UPLOAD_FAILED = new ErrorCode(1_004_001_002, "文件上传失败");
     ErrorCode INVALID_FILE_TYPE = new ErrorCode(1_004_001_003, "不支持的文件类型");
     ErrorCode FILE_SIZE_EXCEEDED = new ErrorCode(1_004_001_004, "文件大小超过限制");
+    ErrorCode CHUNK_UPLOAD_NOT_FOUND = new ErrorCode(1_004_001_008, "分片上传会话不存在或已过期");
+    ErrorCode CHUNK_UPLOAD_INCOMPLETE = new ErrorCode(1_004_001_009, "分片未全部上传完成");
+    ErrorCode CHUNK_INDEX_INVALID = new ErrorCode(1_004_001_010, "分片序号无效");
     ErrorCode DATASET_NO_IMAGES = new ErrorCode(1_004_001_005, "数据集中暂无图片，请先上传图片");
     ErrorCode DATASET_USAGE_NOT_ALLOCATED = new ErrorCode(1_004_001_006, "请先划分数据集用途（训练集/验证集/测试集）后再同步到 Minio");
     ErrorCode DATASET_ANNOTATION_INCOMPLETE = new ErrorCode(1_004_001_007, "数据集尚有未完成标注的图片，无法同步到 Minio");

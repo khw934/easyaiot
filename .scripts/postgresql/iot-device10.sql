@@ -5636,7 +5636,7 @@ SELECT pg_catalog.setval('public.dataset_id_seq', 1, false);
 -- Name: dataset_image_id_seq; Type: SEQUENCE SET; Schema: public; Owner: -
 --
 
-SELECT pg_catalog.setval('public.dataset_image_id_seq', 2, true);
+SELECT pg_catalog.setval('public.dataset_image_id_seq', 88, true);
 
 
 --

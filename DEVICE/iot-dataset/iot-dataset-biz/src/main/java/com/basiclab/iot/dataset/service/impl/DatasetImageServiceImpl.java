@@ -11,6 +11,7 @@ import com.basiclab.iot.dataset.dal.pgsql.DatasetImageMapper;
 import com.basiclab.iot.dataset.dal.pgsql.DatasetMapper;
 import com.basiclab.iot.common.enums.CommonStatusEnum;
 import com.basiclab.iot.common.exception.ServiceException;
+import com.basiclab.iot.dataset.domain.dataset.vo.DatasetImageImportItem;
 import com.basiclab.iot.dataset.domain.dataset.vo.DatasetImagePageReqVO;
 import com.basiclab.iot.dataset.domain.dataset.vo.DatasetImageSaveReqVO;
 import com.basiclab.iot.dataset.domain.dataset.vo.DatasetImageUploadRespVO;
@@ -18,6 +19,7 @@ import com.basiclab.iot.dataset.domain.dataset.vo.DatasetSyncCheckRespVO;
 import com.basiclab.iot.dataset.domain.dataset.vo.DatasetTagPageReqVO;
 import com.basiclab.iot.dataset.service.DatasetImageService;
 import com.basiclab.iot.dataset.service.DatasetTagService;
+import com.basiclab.iot.dataset.service.ImportCancelChecker;
 import com.basiclab.iot.file.RemoteFileService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -26,8 +28,10 @@ import io.minio.errors.ErrorResponseException;
 import io.minio.http.Method;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.env.Environment;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.multipart.MultipartFile;
@@ -38,6 +42,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.math.BigDecimal;
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -45,7 +50,11 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
+import java.util.function.IntConsumer;
 import java.util.stream.Collectors;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
@@ -66,6 +75,12 @@ import static com.basiclab.iot.dataset.enums.ErrorCodeConstants.*;
 public class DatasetImageServiceImpl implements DatasetImageService {
 
     private final static Logger logger = LoggerFactory.getLogger(DatasetImageServiceImpl.class);
+    private static final int IMPORT_ZIP_BATCH_SIZE = 100;
+    private static final int MINIO_UPLOAD_PARALLEL = 12;
+
+    @Resource
+    @Qualifier("uploadExecutor")
+    private Executor uploadExecutor;
 
     @Resource
     private DatasetImageMapper datasetImageMapper;
@@ -92,11 +107,39 @@ public class DatasetImageServiceImpl implements DatasetImageService {
 
     @Override
     public Long createDatasetImage(DatasetImageSaveReqVO createReqVO) {
-        // 插入
         DatasetImageDO image = BeanUtils.toBean(createReqVO, DatasetImageDO.class);
-        datasetImageMapper.insert(image);
-        // 返回
+        insertDatasetImageWithSequenceRecovery(image);
         return image.getId();
+    }
+
+    /**
+     * 插入图片记录；若 PostgreSQL 序列落后于已有主键则自动同步后重试一次。
+     */
+    private void insertDatasetImageWithSequenceRecovery(DatasetImageDO image) {
+        try {
+            datasetImageMapper.insert(image);
+        } catch (DuplicateKeyException ex) {
+            logger.warn("dataset_image 主键冲突，尝试同步序列后重试: id={}", image.getId());
+            datasetImageMapper.syncIdSequence();
+            image.setId(null);
+            datasetImageMapper.insert(image);
+        }
+    }
+
+    private void insertBatchWithSequenceRecovery(List<DatasetImageDO> images) {
+        if (images == null || images.isEmpty()) {
+            return;
+        }
+        try {
+            datasetImageMapper.insertBatch(images, 500);
+        } catch (DuplicateKeyException ex) {
+            logger.warn("dataset_image 批量主键冲突，尝试同步序列后重试");
+            datasetImageMapper.syncIdSequence();
+            for (DatasetImageDO image : images) {
+                image.setId(null);
+            }
+            datasetImageMapper.insertBatch(images, 500);
+        }
     }
 
     @Override
@@ -571,6 +614,22 @@ public class DatasetImageServiceImpl implements DatasetImageService {
         }
     }
 
+    @Override
+    public DatasetImageUploadRespVO processUploadFromPath(Path filePath, String originalFilename,
+                                                          Long datasetId, Boolean isZip) {
+        try {
+            if (Boolean.TRUE.equals(isZip)) {
+                return processZipUploadFromPath(filePath, datasetId);
+            }
+            return processImageUploadFromPath(filePath, originalFilename, datasetId);
+        } catch (ServiceException e) {
+            throw e;
+        } catch (Exception e) {
+            logger.error("文件处理失败: {}", e.getMessage(), e);
+            throw exception(FILE_UPLOAD_FAILED, e.getMessage());
+        }
+    }
+
     /**
      * 上传文件
      */
@@ -580,25 +639,22 @@ public class DatasetImageServiceImpl implements DatasetImageService {
     }
 
     /**
-     * 处理压缩包上传并解压（单文件失败不影响已成功条目）
+     * 处理压缩包上传并解压（批量入库，同名覆盖）
      */
     private DatasetImageUploadRespVO processZipUpload(MultipartFile file, Long datasetId)
             throws IOException {
-        DatasetImageUploadRespVO result = new DatasetImageUploadRespVO();
-        List<String> failedFiles = new ArrayList<>();
+        List<DatasetImageImportItem> items = new ArrayList<>();
         byte[] buffer = new byte[8192];
 
         try (ZipInputStream zis = openZipInputStream(file)) {
             ZipEntry zipEntry;
             while ((zipEntry = zis.getNextEntry()) != null) {
                 if (zipEntry.isDirectory()) {
-                    result.setSkippedCount(result.getSkippedCount() + 1);
                     continue;
                 }
                 String entryName = zipEntry.getName();
                 String originalFilename = Paths.get(entryName).getFileName().toString();
                 if (!isValidImageFile(originalFilename)) {
-                    result.setSkippedCount(result.getSkippedCount() + 1);
                     continue;
                 }
 
@@ -610,26 +666,20 @@ public class DatasetImageServiceImpl implements DatasetImageService {
 
                 byte[] fileData = outputStream.toByteArray();
                 if (fileData.length == 0) {
-                    result.setSkippedCount(result.getSkippedCount() + 1);
                     continue;
                 }
 
-                try {
-                    saveToMinioAndDB(fileData, originalFilename, datasetId);
-                    result.setSuccessCount(result.getSuccessCount() + 1);
-                } catch (Exception e) {
-                    result.setFailedCount(result.getFailedCount() + 1);
-                    if (failedFiles.size() < 20) {
-                        failedFiles.add(originalFilename + ": " + e.getMessage());
-                    }
-                    logger.warn("压缩包内文件上传失败: {}", originalFilename, e);
-                }
+                DatasetImageImportItem item = new DatasetImageImportItem();
+                item.setFilename(originalFilename);
+                item.setData(fileData);
+                items.add(item);
             }
         }
-        result.setFailedFiles(failedFiles);
-        logger.info("压缩包上传完成: 成功 {}，失败 {}，跳过 {}",
-                result.getSuccessCount(), result.getFailedCount(), result.getSkippedCount());
-        return result;
+        return batchImportImages(datasetId, items);
+    }
+
+    private DatasetImageUploadRespVO processZipUploadFromPath(Path zipPath, Long datasetId) throws IOException {
+        return importZipFromPath(datasetId, zipPath, null);
     }
 
     private ZipInputStream openZipInputStream(MultipartFile file) throws IOException {
@@ -645,56 +695,336 @@ public class DatasetImageServiceImpl implements DatasetImageService {
             throw exception(INVALID_FILE_TYPE);
         }
 
-        saveToMinioAndDB(file.getBytes(), file.getOriginalFilename(), datasetId);
+        DatasetImageImportItem item = new DatasetImageImportItem();
+        item.setFilename(file.getOriginalFilename());
+        item.setData(file.getBytes());
+        return batchImportImages(datasetId, Collections.singletonList(item));
+    }
+
+    private DatasetImageUploadRespVO processImageUploadFromPath(Path filePath, String originalFilename,
+                                                                Long datasetId) throws IOException {
+        if (!isValidImageFile(originalFilename)) {
+            throw exception(INVALID_FILE_TYPE);
+        }
+        DatasetImageImportItem item = new DatasetImageImportItem();
+        item.setFilename(originalFilename);
+        item.setData(Files.readAllBytes(filePath));
+        return batchImportImages(datasetId, Collections.singletonList(item));
+    }
+
+    @Override
+    public Long saveImportedImage(Long datasetId, String filename, byte[] fileData,
+                                  String annotationsJson, Integer width, Integer height, Integer completed) {
+        DatasetImageImportItem item = new DatasetImageImportItem();
+        item.setFilename(filename);
+        item.setData(fileData);
+        item.setAnnotationsJson(annotationsJson);
+        item.setWidth(width);
+        item.setHeight(height);
+        item.setCompleted(completed);
+        DatasetImageUploadRespVO result = batchImportImages(datasetId, Collections.singletonList(item));
+        if (result.getSuccessCount() <= 0) {
+            throw exception(FILE_UPLOAD_FAILED, "图片导入失败");
+        }
+        List<DatasetImageDO> saved = datasetImageMapper.selectByDatasetIdAndNames(
+                datasetId, Collections.singletonList(filename));
+        return saved.isEmpty() ? null : saved.get(0).getId();
+    }
+
+    @Override
+    public DatasetImageUploadRespVO importZipFromPath(Long datasetId, Path zipPath, IntConsumer progressCallback) {
+        return importZipFromPath(datasetId, zipPath, progressCallback, ImportCancelChecker.NONE);
+    }
+
+    @Override
+    public DatasetImageUploadRespVO importZipFromPath(Long datasetId, Path zipPath, IntConsumer progressCallback,
+                                                    ImportCancelChecker cancelChecker) {
+        if (cancelChecker == null) {
+            cancelChecker = ImportCancelChecker.NONE;
+        }
+        Map<String, DatasetImageDO> existingByName = loadExistingByName(datasetId);
+        DatasetImageUploadRespVO total = new DatasetImageUploadRespVO();
+        List<DatasetImageImportItem> batch = new ArrayList<>(IMPORT_ZIP_BATCH_SIZE);
+        int processed = 0;
+        byte[] buffer = new byte[8192];
+
+        try (ZipInputStream zis = new ZipInputStream(Files.newInputStream(zipPath), StandardCharsets.UTF_8)) {
+            ZipEntry zipEntry;
+            while ((zipEntry = zis.getNextEntry()) != null) {
+                cancelChecker.throwIfCancelled();
+                if (zipEntry.isDirectory()) {
+                    continue;
+                }
+                String entryName = zipEntry.getName();
+                String originalFilename = Paths.get(entryName).getFileName().toString();
+                if (!isValidImageFile(originalFilename)) {
+                    continue;
+                }
+
+                ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+                int len;
+                while ((len = zis.read(buffer)) > 0) {
+                    outputStream.write(buffer, 0, len);
+                }
+
+                byte[] fileData = outputStream.toByteArray();
+                if (fileData.length == 0) {
+                    continue;
+                }
+
+                DatasetImageImportItem item = new DatasetImageImportItem();
+                item.setFilename(originalFilename);
+                item.setData(fileData);
+                batch.add(item);
+
+                if (batch.size() >= IMPORT_ZIP_BATCH_SIZE) {
+                    cancelChecker.throwIfCancelled();
+                    mergeImportResult(total, batchImportImagesInternal(datasetId, batch, existingByName));
+                    processed += batch.size();
+                    if (progressCallback != null) {
+                        progressCallback.accept(processed);
+                    }
+                    batch.clear();
+                }
+            }
+            if (!batch.isEmpty()) {
+                cancelChecker.throwIfCancelled();
+                mergeImportResult(total, batchImportImagesInternal(datasetId, batch, existingByName));
+                processed += batch.size();
+                if (progressCallback != null) {
+                    progressCallback.accept(processed);
+                }
+            }
+        } catch (IOException e) {
+            throw exception(FILE_UPLOAD_FAILED, e.getMessage());
+        }
+        logger.info("ZIP 流式导入完成: 成功 {}，覆盖 {}，失败 {}，跳过 {}",
+                total.getSuccessCount(), total.getOverwrittenCount(), total.getFailedCount(), total.getSkippedCount());
+        return total;
+    }
+
+    @Override
+    public DatasetImageUploadRespVO batchImportImages(Long datasetId, List<DatasetImageImportItem> items) {
+        if (items == null || items.isEmpty()) {
+            return new DatasetImageUploadRespVO();
+        }
+        Map<String, DatasetImageDO> existingByName = loadExistingByName(datasetId);
+        return batchImportImagesInternal(datasetId, items, existingByName);
+    }
+
+    private Map<String, DatasetImageDO> loadExistingByName(Long datasetId) {
+        return datasetImageMapper.selectByDatasetId(datasetId).stream()
+                .collect(Collectors.toMap(
+                        DatasetImageDO::getName,
+                        img -> img,
+                        (a, b) -> a,
+                        ConcurrentHashMap::new));
+    }
+
+    private void mergeImportResult(DatasetImageUploadRespVO total, DatasetImageUploadRespVO batch) {
+        total.setSuccessCount(total.getSuccessCount() + batch.getSuccessCount());
+        total.setFailedCount(total.getFailedCount() + batch.getFailedCount());
+        total.setSkippedCount(total.getSkippedCount() + batch.getSkippedCount());
+        total.setOverwrittenCount(total.getOverwrittenCount() + batch.getOverwrittenCount());
+        if (batch.getFailedFiles() != null && !batch.getFailedFiles().isEmpty()) {
+            List<String> merged = total.getFailedFiles();
+            for (String failed : batch.getFailedFiles()) {
+                if (merged.size() >= 20) {
+                    break;
+                }
+                merged.add(failed);
+            }
+        }
+    }
+
+    private DatasetImageUploadRespVO batchImportImagesInternal(Long datasetId, List<DatasetImageImportItem> items,
+                                                               Map<String, DatasetImageDO> existingByName) {
         DatasetImageUploadRespVO result = new DatasetImageUploadRespVO();
-        result.setSuccessCount(1);
+        if (items == null || items.isEmpty()) {
+            return result;
+        }
+
+        Map<String, DatasetImageImportItem> deduped = new LinkedHashMap<>();
+        int skipped = 0;
+        for (DatasetImageImportItem item : items) {
+            if (item == null || item.getFilename() == null) {
+                skipped++;
+                continue;
+            }
+            String filename = Paths.get(item.getFilename()).getFileName().toString();
+            if (!isValidImageFile(filename)) {
+                skipped++;
+                continue;
+            }
+            if (item.getData() == null || item.getData().length == 0) {
+                skipped++;
+                continue;
+            }
+            item.setFilename(filename);
+            deduped.put(filename, item);
+        }
+        result.setSkippedCount(skipped);
+
+        if (deduped.isEmpty()) {
+            return result;
+        }
+
+        createBucketIfNotExists(minioBucket);
+
+        List<DatasetImageImportItem> itemList = new ArrayList<>(deduped.values());
+        List<ImportItemResult> importResults = new ArrayList<>(itemList.size());
+        for (int i = 0; i < itemList.size(); i += MINIO_UPLOAD_PARALLEL) {
+            int end = Math.min(i + MINIO_UPLOAD_PARALLEL, itemList.size());
+            List<DatasetImageImportItem> chunk = itemList.subList(i, end);
+            List<CompletableFuture<ImportItemResult>> futures = chunk.stream()
+                    .map(item -> CompletableFuture.supplyAsync(
+                            () -> uploadImportItem(datasetId, item), uploadExecutor))
+                    .collect(Collectors.toList());
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+            for (CompletableFuture<ImportItemResult> future : futures) {
+                importResults.add(future.join());
+            }
+        }
+
+        List<DatasetImageDO> toInsert = new ArrayList<>();
+        List<DatasetImageDO> toUpdate = new ArrayList<>();
+        List<String> oldMinioObjects = new ArrayList<>();
+        List<String> failedFiles = new ArrayList<>();
+        int overwritten = 0;
+
+        for (ImportItemResult importResult : importResults) {
+            if (!importResult.success) {
+                result.setFailedCount(result.getFailedCount() + 1);
+                if (failedFiles.size() < 20) {
+                    failedFiles.add(importResult.filename + ": " + importResult.errorMessage);
+                }
+                continue;
+            }
+
+            DatasetImageDO existing = existingByName.get(importResult.filename);
+            if (existing != null) {
+                String oldObject = parseObjectNameFromPath(existing.getPath());
+                if (oldObject != null) {
+                    oldMinioObjects.add(oldObject);
+                }
+                applyImportFields(existing, importResult.filename, importResult.storagePath,
+                        importResult.fileSize, importResult.item);
+                toUpdate.add(existing);
+                overwritten++;
+            } else {
+                DatasetImageDO image = buildNewImage(datasetId, importResult.filename,
+                        importResult.storagePath, importResult.fileSize, importResult.item);
+                toInsert.add(image);
+                existingByName.put(importResult.filename, image);
+            }
+            result.setSuccessCount(result.getSuccessCount() + 1);
+        }
+
+        removeMinioObjectsQuietly(oldMinioObjects);
+
+        if (!toInsert.isEmpty()) {
+            insertBatchWithSequenceRecovery(toInsert);
+        }
+        if (!toUpdate.isEmpty()) {
+            datasetImageMapper.updateBatch(toUpdate, 500);
+        }
+
+        if (result.getSuccessCount() > 0) {
+            invalidateDatasetAllocationIfNeeded(datasetId);
+        }
+
+        result.setOverwrittenCount(overwritten);
+        result.setFailedFiles(failedFiles);
         return result;
     }
 
-    /**
-     * 保存到MinIO并插入数据库记录
-     */
-    private void saveToMinioAndDB(byte[] fileData, String originalFilename, Long datasetId) {
+    private ImportItemResult uploadImportItem(Long datasetId, DatasetImageImportItem item) {
+        ImportItemResult result = new ImportItemResult();
+        result.filename = item.getFilename();
+        result.item = item;
         try {
-            // 1. 生成唯一存储路径
-            String fileExtension = getFileExtension(originalFilename);
-            String storagePath = String.format("%s/%s.%s",
-                    datasetId,
-                    UUID.randomUUID(),
-                    fileExtension);
-
-            // 2. 确保 bucket 存在
-            createBucketIfNotExists(minioBucket);
-
-            // 3. 上传到MinIO
+            byte[] fileData = item.getData();
+            String fileExtension = getFileExtension(item.getFilename());
+            String storagePath = String.format("%s/%s.%s", datasetId, UUID.randomUUID(), fileExtension);
             uploadToMinio(fileData, storagePath, getContentType(fileExtension));
-
-            // 4. 保存到数据库
-            DatasetImageDO image = new DatasetImageDO();
-            image.setDatasetId(datasetId);
-            image.setName(originalFilename);
-            image.setPath("/api/v1/buckets/" + minioBucket + "/objects/download?prefix=" + storagePath);
-            image.setSize((long) fileData.length);
-            image.setIsTrain(0);
-            image.setIsValidation(0);
-            image.setIsTest(0);
-            datasetImageMapper.insert(image);
-            invalidateDatasetAllocationIfNeeded(datasetId);
-        } catch (ErrorResponseException e) {
-            String errorCode = e.errorResponse() != null ? e.errorResponse().code() : "Unknown";
-            String errorMessage = e.errorResponse() != null ? e.errorResponse().message() : e.getMessage();
-            
-            // 特别处理 Access Key 错误
-            if (errorMessage != null && errorMessage.contains("Access Key Id")) {
-                logger.error("MinIO Access Key 配置错误: {}", errorMessage);
-                throw exception(FILE_UPLOAD_FAILED, "MinIO 访问密钥配置错误，请检查配置文件中的 minio.access-key 和 minio.secret-key");
-            }
-            
-            logger.error("文件保存失败 - MinIO错误 [{}]: {}", errorCode, errorMessage, e);
-            throw exception(FILE_UPLOAD_FAILED, "文件保存失败: " + errorMessage);
+            result.success = true;
+            result.storagePath = storagePath;
+            result.fileSize = fileData.length;
         } catch (Exception e) {
-            logger.error("文件保存失败: {}", e.getMessage(), e);
-            throw exception(FILE_UPLOAD_FAILED, "文件保存失败: " + e.getMessage());
+            result.success = false;
+            result.errorMessage = e.getMessage();
+            logger.warn("图片导入失败: {}", item.getFilename(), e);
+        }
+        return result;
+    }
+
+    private static class ImportItemResult {
+        private boolean success;
+        private String filename;
+        private String storagePath;
+        private long fileSize;
+        private DatasetImageImportItem item;
+        private String errorMessage;
+    }
+
+    private DatasetImageDO buildNewImage(Long datasetId, String filename, String storagePath, long size,
+                                         DatasetImageImportItem item) {
+        DatasetImageDO image = new DatasetImageDO();
+        image.setDatasetId(datasetId);
+        image.setName(filename);
+        image.setPath(buildMinioDownloadPath(storagePath));
+        image.setSize(size);
+        image.setIsTrain(0);
+        image.setIsValidation(0);
+        image.setIsTest(0);
+        applyOptionalImportFields(image, item);
+        return image;
+    }
+
+    private void applyImportFields(DatasetImageDO image, String filename, String storagePath, long size,
+                                   DatasetImageImportItem item) {
+        image.setName(filename);
+        image.setPath(buildMinioDownloadPath(storagePath));
+        image.setSize(size);
+        applyOptionalImportFields(image, item);
+    }
+
+    private void applyOptionalImportFields(DatasetImageDO image, DatasetImageImportItem item) {
+        if (item.getAnnotationsJson() != null && !item.getAnnotationsJson().isEmpty()) {
+            image.setAnnotations(item.getAnnotationsJson());
+        } else {
+            image.setAnnotations(null);
+        }
+        if (item.getWidth() != null) {
+            image.setWidth(item.getWidth());
+        }
+        if (item.getHeight() != null) {
+            image.setHeigh(item.getHeight());
+        }
+        if (item.getCompleted() != null) {
+            image.setCompleted(item.getCompleted());
+            image.setModificationCount(item.getCompleted() == 1 ? 1 : 0);
+        } else {
+            image.setCompleted(0);
+            image.setModificationCount(0);
+        }
+    }
+
+    private String buildMinioDownloadPath(String storagePath) {
+        return "/api/v1/buckets/" + minioBucket + "/objects/download?prefix=" + storagePath;
+    }
+
+    private void removeMinioObjectsQuietly(List<String> objectNames) {
+        for (String objectName : objectNames) {
+            try {
+                minioClient.removeObject(
+                        RemoveObjectArgs.builder()
+                                .bucket(minioBucket)
+                                .object(objectName)
+                                .build());
+            } catch (Exception e) {
+                logger.warn("删除旧 MinIO 文件失败: {}", objectName, e);
+            }
         }
     }
 
@@ -713,6 +1043,17 @@ public class DatasetImageServiceImpl implements DatasetImageService {
                             .contentType(contentType)
                             .build());
         }
+    }
+
+    private void uploadToMinioFromStream(InputStream inputStream, long size, String objectName, String contentType)
+            throws Exception {
+        minioClient.putObject(
+                PutObjectArgs.builder()
+                        .bucket(minioBucket)
+                        .object(objectName)
+                        .stream(inputStream, size, -1)
+                        .contentType(contentType)
+                        .build());
     }
 
     /**

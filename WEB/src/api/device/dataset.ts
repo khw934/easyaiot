@@ -161,7 +161,110 @@ export const exportDatasetTagExcel = (params) => {
 };
 
 // 图片/压缩包上传（解压与入库可能较慢，延长超时）
-export const uploadDatasetImage = (formData: FormData) => {
+export interface DatasetImageUploadResult {
+  successCount?: number;
+  failedCount?: number;
+  skippedCount?: number;
+  overwrittenCount?: number;
+  failedFiles?: string[];
+  importTaskId?: string;
+  importStatus?: 'processing' | 'completed';
+}
+
+export interface DatasetImageImportTaskResult {
+  taskId: string;
+  status: 'processing' | 'completed' | 'failed' | 'cancelled';
+  processedCount?: number;
+  result?: DatasetImageUploadResult;
+  annotationResult?: DatasetAnnotationImportResult;
+  errorMessage?: string;
+}
+
+export const getDatasetImageImportTask = (taskId: string): Promise<DatasetImageImportTaskResult> => {
+  defHttp.setHeader({'X-Authorization': 'Bearer ' + localStorage.getItem('jwt_token')});
+  return defHttp.get(
+    { url: `${Api.DatasetImage}/import-task/${taskId}`, timeout: 30 * 1000 },
+    { successMessageMode: 'none', errorMessageMode: 'none' },
+  );
+};
+
+export const cancelDatasetImageImportTask = (taskId: string): Promise<boolean> => {
+  defHttp.setHeader({'X-Authorization': 'Bearer ' + localStorage.getItem('jwt_token')});
+  return defHttp.delete(
+    { url: `${Api.DatasetImage}/import-task/${taskId}`, timeout: 30 * 1000 },
+    { successMessageMode: 'none', errorMessageMode: 'none' },
+  );
+};
+
+function sleepMs(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function waitForDatasetImportTask(
+  taskId: string,
+  options?: { onProgress?: (processed: number) => void; signal?: AbortSignal },
+): Promise<DatasetImageImportTaskResult> {
+  const pollIntervalMs = 2000;
+  let cancelRequested = false;
+  const requestCancel = () => {
+    if (cancelRequested) return;
+    cancelRequested = true;
+    void cancelDatasetImageImportTask(taskId).catch(() => {});
+  };
+  options?.signal?.addEventListener('abort', requestCancel, { once: true });
+  try {
+    while (true) {
+      if (options?.signal?.aborted) {
+        requestCancel();
+        throw new Error('上传已取消');
+      }
+      const task = await getDatasetImageImportTask(taskId);
+      if (task.status === 'cancelled') {
+        throw new Error('上传已取消');
+      }
+      if (task.status === 'completed') {
+        return task;
+      }
+      if (task.status === 'failed') {
+        throw new Error(task.errorMessage || '导入失败');
+      }
+      if (task.processedCount != null && task.processedCount > 0) {
+        options?.onProgress?.(task.processedCount);
+      }
+      await sleepMs(pollIntervalMs);
+    }
+  } finally {
+    options?.signal?.removeEventListener('abort', requestCancel);
+  }
+}
+
+interface DatasetImportTaskSubmitResult {
+  taskId: string;
+  status: string;
+}
+
+async function submitAnnotationPathImport(
+  url: string,
+  data: Record<string, unknown>,
+  signal?: AbortSignal,
+): Promise<DatasetAnnotationImportResult> {
+  defHttp.setHeader({ 'X-Authorization': 'Bearer ' + localStorage.getItem('jwt_token') });
+  const submit = await defHttp.post<DatasetImportTaskSubmitResult>(
+    { url, data, timeout: 60 * 1000, signal },
+    { successMessageMode: 'none', errorMessageMode: 'none' },
+  );
+  const taskId = submit?.taskId;
+  if (!taskId) {
+    throw new Error('导入任务创建失败');
+  }
+  const task = await waitForDatasetImportTask(taskId, { signal });
+  if (!task.annotationResult) {
+    throw new Error('导入结果为空');
+  }
+  return task.annotationResult;
+}
+
+export const uploadDatasetImage = (formData: FormData): Promise<DatasetImageUploadResult> => {
   defHttp.setHeader({'X-Authorization': 'Bearer ' + localStorage.getItem('jwt_token')});
   return defHttp.post(
     {
@@ -176,6 +279,88 @@ export const uploadDatasetImage = (formData: FormData) => {
   );
 };
 
+// —— 分片上传（断点续传，最大 200GB）——
+
+export interface DatasetChunkUploadInitParams {
+  datasetId: number;
+  fileName: string;
+  fileSize: number;
+  isZip: boolean;
+  totalChunks: number;
+  chunkSize: number;
+  fileKey?: string;
+}
+
+export interface DatasetChunkUploadInitResult {
+  uploadId: string;
+  uploadedChunks?: number[];
+  resumed?: boolean;
+}
+
+export interface DatasetChunkUploadStatusResult {
+  uploadId: string;
+  totalChunks: number;
+  uploadedChunks: number[];
+}
+
+const chunkUploadHeaders = () => ({
+  'X-Authorization': 'Bearer ' + localStorage.getItem('jwt_token'),
+});
+
+export const initDatasetChunkUpload = (data: DatasetChunkUploadInitParams): Promise<DatasetChunkUploadInitResult> => {
+  defHttp.setHeader(chunkUploadHeaders());
+  return defHttp.post(
+    { url: `${Api.DatasetImage}/upload/chunk/init`, data, timeout: 60 * 1000 },
+    { successMessageMode: 'none', errorMessageMode: 'none' },
+  );
+};
+
+export const uploadDatasetChunk = (uploadId: string, chunkIndex: number, chunk: Blob): Promise<boolean> => {
+  defHttp.setHeader(chunkUploadHeaders());
+  const formData = new FormData();
+  formData.append('uploadId', uploadId);
+  formData.append('chunkIndex', String(chunkIndex));
+  formData.append('chunk', chunk, `chunk-${chunkIndex}`);
+  return defHttp.post(
+    {
+      url: `${Api.DatasetImage}/upload/chunk`,
+      data: formData,
+      timeout: 10 * 60 * 1000,
+    },
+    { successMessageMode: 'none', errorMessageMode: 'none' },
+  );
+};
+
+export const getDatasetChunkUploadStatus = (uploadId: string): Promise<DatasetChunkUploadStatusResult> => {
+  defHttp.setHeader(chunkUploadHeaders());
+  return defHttp.get(
+    { url: `${Api.DatasetImage}/upload/chunk/status`, params: { uploadId }, timeout: 30 * 1000 },
+    { successMessageMode: 'none', errorMessageMode: 'none' },
+  );
+};
+
+export const completeDatasetChunkUpload = (uploadId: string): Promise<DatasetImageUploadResult> => {
+  defHttp.setHeader(chunkUploadHeaders());
+  const formData = new FormData();
+  formData.append('uploadId', uploadId);
+  return defHttp.post(
+    {
+      url: `${Api.DatasetImage}/upload/chunk/complete`,
+      data: formData,
+      timeout: 10 * 60 * 1000,
+    },
+    { successMessageMode: 'none', errorMessageMode: 'none' },
+  );
+};
+
+export const abortDatasetChunkUpload = (uploadId: string): Promise<boolean> => {
+  defHttp.setHeader(chunkUploadHeaders());
+  return defHttp.delete(
+    { url: `${Api.DatasetImage}/upload/chunk`, params: { uploadId }, timeout: 30 * 1000 },
+    { successMessageMode: 'none', errorMessageMode: 'none' },
+  );
+};
+
 // —— 标注工具：导入/导出（对齐 auto-labeling V9.13.0）——
 
 export interface DatasetAnnotationImportResult {
@@ -187,6 +372,9 @@ export interface DatasetAnnotationImportResult {
   cloudDatasetId?: number;
   updatedImages?: number;
   createdImages?: number;
+  /** 导入时创建的类别/标签名 */
+  classes?: string[];
+  tagsCreated?: number;
 }
 
 export interface DatasetAnnotationExportParams {
@@ -200,7 +388,10 @@ export interface DatasetAnnotationExportParams {
 
 const annotationPost = (url: string, data?: Record<string, unknown>, options: Record<string, unknown> = {}) => {
   defHttp.setHeader({ 'X-Authorization': 'Bearer ' + localStorage.getItem('jwt_token') });
-  return defHttp.post({ url, data, ...options }, { isTransformResponse: true });
+  return defHttp.post(
+    { url, data, timeout: 60 * 60 * 1000, ...options },
+    { isTransformResponse: true, errorMessageMode: 'message' },
+  );
 };
 
 /** 导出 YOLO ZIP */
@@ -237,37 +428,41 @@ export const importAnnotationLabelme = (datasetId: number, formData: FormData) =
   });
 };
 
-/** ImageFolder 路径导入 */
-export const importAnnotationImageFolderPath = (datasetId: number, path: string) =>
-  annotationPost(`${Api.Dataset}/${datasetId}/annotation/import-path`, { path });
+/** ImageFolder 路径导入（异步任务，支持取消） */
+export const importAnnotationImageFolderPath = (datasetId: number, path: string, signal?: AbortSignal) =>
+  submitAnnotationPathImport(`${Api.Dataset}/${datasetId}/annotation/import-path`, { path }, signal);
 
-/** YOLO 路径导入 */
-export const importAnnotationYoloPath = (datasetId: number, path: string) =>
-  annotationPost(`${Api.Dataset}/${datasetId}/annotation/import-yolo-path`, { path });
+/** YOLO 路径导入（异步任务，支持取消） */
+export const importAnnotationYoloPath = (datasetId: number, path: string, signal?: AbortSignal) =>
+  submitAnnotationPathImport(`${Api.Dataset}/${datasetId}/annotation/import-yolo-path`, { path }, signal);
 
-/** COCO 路径导入 */
-export const importAnnotationCocoPath = (datasetId: number, body: { cocoJson: string; imagesRoot?: string }) =>
-  annotationPost(`${Api.Dataset}/${datasetId}/annotation/import-coco-path`, body);
+/** COCO 路径导入（异步任务，支持取消） */
+export const importAnnotationCocoPath = (
+  datasetId: number,
+  body: { cocoJson: string; imagesRoot?: string },
+  signal?: AbortSignal,
+) => submitAnnotationPathImport(`${Api.Dataset}/${datasetId}/annotation/import-coco-path`, body, signal);
 
 /** 云平台数据集列表 */
 export const listAnnotationCloudDatasets = () =>
   commonApi('get', `${Api.Dataset}/annotation/cloud-datasets`, {}, {}, false);
 
 /** 从云平台导入 */
-export const importAnnotationFromCloud = (datasetId: number, sourceDatasetId: number) =>
-  annotationPost(`${Api.Dataset}/${datasetId}/annotation/cloud-import`, { sourceDatasetId });
+export const importAnnotationFromCloud = (datasetId: number, sourceDatasetId: number, signal?: AbortSignal) =>
+  annotationPost(`${Api.Dataset}/${datasetId}/annotation/cloud-import`, { sourceDatasetId }, { signal });
 
 /** 导出到云平台 */
 export const exportAnnotationToCloud = (datasetId: number, body: { name: string; version: string }) =>
   annotationPost(`${Api.Dataset}/${datasetId}/annotation/cloud-export`, body);
 
 /** 视频抽帧 */
-export const extractAnnotationFrames = (datasetId: number, formData: FormData) => {
+export const extractAnnotationFrames = (datasetId: number, formData: FormData, signal?: AbortSignal) => {
   defHttp.setHeader({ 'X-Authorization': 'Bearer ' + localStorage.getItem('jwt_token') });
   return defHttp.post({
     url: `${Api.Dataset}/${datasetId}/annotation/extract-frames`,
     data: formData,
     timeout: 30 * 60 * 1000,
+    signal,
   });
 };
 

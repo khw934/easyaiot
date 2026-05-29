@@ -8,6 +8,8 @@ import com.basiclab.iot.dataset.domain.dataset.vo.DatasetImagePageReqVO;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 
+import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -79,4 +81,22 @@ public interface DatasetImageMapper extends BaseMapperX<DatasetImageDO> {
      * @return 图片列表
      */
     List<DatasetImageDO> selectByDatasetId(@Param("datasetId") Long datasetId);
+
+    /**
+     * 将 PostgreSQL 主键序列同步到当前表内最大 id，避免 COPY/手工导入数据后 nextval 与已有主键冲突。
+     */
+    void syncIdSequence();
+
+    /**
+     * 按数据集 ID 与文件名批量查询已有图片（用于导入覆盖）
+     */
+    default List<DatasetImageDO> selectByDatasetIdAndNames(@Param("datasetId") Long datasetId,
+                                                             @Param("names") Collection<String> names) {
+        if (names == null || names.isEmpty()) {
+            return Collections.emptyList();
+        }
+        return selectList(new LambdaQueryWrapperX<DatasetImageDO>()
+                .eq(DatasetImageDO::getDatasetId, datasetId)
+                .in(DatasetImageDO::getName, names));
+    }
 }

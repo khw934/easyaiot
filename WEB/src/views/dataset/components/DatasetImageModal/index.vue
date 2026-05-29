@@ -2,20 +2,19 @@
   <BasicModal
     @register="register"
     :title="getTitle"
-    @cancel="handleCancel"
+    :closeFunc="handleClose"
     :width="700"
     @ok="handleOk"
     :canFullscreen="false"
+    :okButtonProps="{ disabled: state.uploading }"
   >
     <div class="upload-modal">
-      <Spin :spinning="state.uploading">
+      <Spin :spinning="state.uploading && state.progressPercent < 100">
         <Form :labelCol="{ span: 5 }" :wrapperCol="{ span: 19 }">
-          <!-- 数据集ID显示 -->
           <FormItem label="数据集ID">
             <InputNumber v-model:value="state.datasetId" disabled/>
           </FormItem>
 
-          <!-- 文件上传区域 -->
           <FormItem :label="uploadLabel" required>
             <Upload
               v-model:file-list="state.fileList"
@@ -24,8 +23,9 @@
               :accept="acceptType"
               :max-count="1"
               list-type="picture"
+              :disabled="state.uploading"
             >
-              <Button>
+              <Button :disabled="state.uploading">
                 <UploadOutlined/>
                 选择文件
               </Button>
@@ -35,9 +35,19 @@
             </Upload>
           </FormItem>
 
-          <!-- 压缩包解压选项 -->
           <FormItem v-if="state.isZip" label="解压选项">
-            <Checkbox v-model:checked="state.unzip">自动解压压缩包</Checkbox>
+            <Checkbox v-model:checked="state.unzip" :disabled="state.uploading">自动解压压缩包</Checkbox>
+          </FormItem>
+
+          <FormItem v-if="state.uploading" label="上传进度">
+            <DatasetImportProgress
+              :percent="state.progressPercent"
+              detail="支持断点续传，关闭页面后重新选择同一文件可继续上传（最大 200GB）"
+              :loading="state.cancelling"
+              cancel-text="取消上传"
+              confirm-title="确定取消上传吗？已上传的分片将被删除。"
+              @cancel="cancelUpload"
+            />
           </FormItem>
         </Form>
       </Spin>
@@ -46,12 +56,17 @@
 </template>
 
 <script lang="ts" setup>
-import {computed, reactive} from 'vue';
+import {computed, reactive, ref} from 'vue';
 import {BasicModal, useModalInner} from '@/components/Modal';
 import {Button, Checkbox, Form, FormItem, InputNumber, message, Spin, Upload} from 'ant-design-vue';
 import {UploadOutlined} from '@ant-design/icons-vue';
 import {useMessage} from '@/hooks/web/useMessage';
-import {uploadDatasetImage} from '@/api/device/dataset';
+import DatasetImportProgress from '@/views/dataset/components/DatasetImportProgress.vue';
+import {
+  DATASET_MAX_FILE_SIZE,
+  formatFileSize,
+  resumableUploadDatasetFile,
+} from '@/utils/upload/resumableUpload';
 defineOptions({name: 'DatasetImageModal'});
 
 const {createMessage} = useMessage();
@@ -63,13 +78,17 @@ const state = reactive({
   fileList: [] as any[],
   unzip: true,
   uploading: false,
+  cancelling: false,
+  progressPercent: 0,
 });
+
+const abortController = ref<AbortController | null>(null);
 
 const getTitle = computed(() => state.isImage ? '上传图片' : '上传图片压缩包');
 const uploadLabel = computed(() => state.isImage ? '选择图片' : '选择压缩包');
 const hintText = computed(() => {
-  if (state.isImage) return '支持格式: JPG/PNG/JPEG，最大50MB';
-  return '支持ZIP格式压缩包，最大200MB';
+  if (state.isImage) return '支持 JPG/PNG/JPEG，最大 200GB，支持断点续传';
+  return '支持 ZIP 压缩包，最大 200GB，支持断点续传';
 });
 const acceptType = computed(() => state.isImage ? 'image/*' : '.zip');
 
@@ -80,33 +99,48 @@ const [register, {closeModal}] = useModalInner((data) => {
   state.isZip = isZip;
   state.fileList = [];
   state.unzip = true;
+  state.uploading = false;
+  state.cancelling = false;
+  state.progressPercent = 0;
 });
 
 const emits = defineEmits(['success']);
 
-function handleCancel() {
+function cancelUpload() {
+  if (!state.uploading || state.cancelling) {
+    return;
+  }
+  state.cancelling = true;
+  abortController.value?.abort();
   state.fileList = [];
-  closeModal();
+  state.uploading = false;
+  state.progressPercent = 0;
+  createMessage.info('已取消上传');
 }
 
-function beforeUpload(file: File) {
-  const isImage = state.isImage;
-  const isLtSize = isImage ? file.size < 50 * 1024 * 1024 : file.size < 200 * 1024 * 1024;
-
-  if (!isLtSize) {
-    message.error(`文件大小不能超过${isImage ? '50MB' : '200MB'}`);
-    return Upload.LIST_IGNORE;
+async function handleClose(): Promise<boolean> {
+  if (state.uploading) {
+    abortController.value?.abort();
   }
-
+  state.fileList = [];
+  state.uploading = false;
+  state.cancelling = false;
+  state.progressPercent = 0;
   return true;
 }
 
-/** 阻止 Ant Upload 自动提交，由确认按钮统一调用业务上传接口 */
+function beforeUpload(file: File) {
+  if (file.size > DATASET_MAX_FILE_SIZE) {
+    message.error(`文件大小不能超过 ${formatFileSize(DATASET_MAX_FILE_SIZE)}`);
+    return Upload.LIST_IGNORE;
+  }
+  return true;
+}
+
 function noopCustomRequest(options: { onSuccess?: (body: string) => void }) {
   options.onSuccess?.('ok');
 }
 
-// 处理上传
 async function handleOk() {
   if (!state.fileList.length) {
     message.error('请选择要上传的文件');
@@ -118,16 +152,29 @@ async function handleOk() {
     return;
   }
 
-  const file = state.fileList[0];
-  const formData = new FormData();
-  formData.append('file', file.originFileObj);
-  formData.append('datasetId', state.datasetId.toString());
-  formData.append('isZip', state.isZip.toString());
-  formData.append('unzip', state.unzip.toString());
+  const fileItem = state.fileList[0];
+  const file: File = fileItem.originFileObj || fileItem;
+  if (!file) {
+    message.error('无法读取文件');
+    return;
+  }
+
+  abortController.value = new AbortController();
 
   try {
     state.uploading = true;
-    const result = await uploadDatasetImage(formData);
+    state.progressPercent = 0;
+
+    const result = await resumableUploadDatasetFile({
+      datasetId: state.datasetId,
+      file,
+      isZip: state.isZip,
+      onProgress: (percent) => {
+        state.progressPercent = percent;
+      },
+      signal: abortController.value.signal,
+    });
+
     const failedCount = result?.failedCount ?? 0;
     const successCount = result?.successCount ?? 0;
     if (failedCount > 0) {
@@ -138,10 +185,14 @@ async function handleOk() {
     emits('success');
     closeModal();
   } catch (error: any) {
-    console.error('上传失败:', error);
-    createMessage.error(error?.message || '上传失败');
+    if (error?.message !== '上传已取消') {
+      console.error('上传失败:', error);
+      createMessage.error(error?.message || '上传失败，可重新选择同一文件继续上传');
+    }
   } finally {
     state.uploading = false;
+    state.cancelling = false;
+    abortController.value = null;
   }
 }
 </script>
@@ -150,16 +201,16 @@ async function handleOk() {
 .upload-modal {
   padding: 20px;
 
-  .ant-upload-hint {
-    margin-top: 8px;
-    color: #999;
-    font-size: 12px;
-  }
-
   :deep(.ant-form-item-label) {
     & > label::after {
       content: '';
     }
   }
+}
+
+.upload-modal :deep(.ant-upload-hint) {
+  margin-top: 8px;
+  color: #999;
+  font-size: 12px;
 }
 </style>

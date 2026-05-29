@@ -3,6 +3,7 @@ package com.basiclab.iot.dataset.controller;
 import com.basiclab.iot.common.domain.CommonResult;
 import com.basiclab.iot.dataset.domain.dataset.vo.*;
 import com.basiclab.iot.dataset.service.DatasetAnnotationService;
+import com.basiclab.iot.dataset.service.DatasetImageImportTaskService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -29,6 +30,9 @@ public class DatasetAnnotationController {
 
     @Resource
     private DatasetAnnotationService datasetAnnotationService;
+
+    @Resource
+    private DatasetImageImportTaskService datasetImageImportTaskService;
 
     @PostMapping("/{datasetId}/annotation/export")
     @Operation(summary = "导出 YOLO 格式数据集 ZIP")
@@ -57,26 +61,36 @@ public class DatasetAnnotationController {
 
     @PostMapping("/{datasetId}/annotation/import-path")
     @Operation(summary = "导入 ImageFolder（LabelMe / COCO / YOLO 回退）")
-    public CommonResult<DatasetAnnotationImportResultVO> importImageFolderPath(
+    public CommonResult<DatasetImageImportTaskRespVO> importImageFolderPath(
             @PathVariable("datasetId") Long datasetId,
             @Valid @RequestBody DatasetAnnotationPathImportReqVO reqVO) {
-        return success(datasetAnnotationService.importImageFolderPath(datasetId, reqVO.getPath()));
+        String taskId = datasetImageImportTaskService.submitImageFolderPathImport(datasetId, reqVO.getPath());
+        return success(buildProcessingTask(taskId));
     }
 
     @PostMapping("/{datasetId}/annotation/import-yolo-path")
     @Operation(summary = "导入 YOLO 数据集（仅 .txt）")
-    public CommonResult<DatasetAnnotationImportResultVO> importYoloPath(
+    public CommonResult<DatasetImageImportTaskRespVO> importYoloPath(
             @PathVariable("datasetId") Long datasetId,
             @Valid @RequestBody DatasetAnnotationPathImportReqVO reqVO) {
-        return success(datasetAnnotationService.importYoloPath(datasetId, reqVO.getPath()));
+        String taskId = datasetImageImportTaskService.submitYoloPathImport(datasetId, reqVO.getPath());
+        return success(buildProcessingTask(taskId));
     }
 
     @PostMapping("/{datasetId}/annotation/import-coco-path")
     @Operation(summary = "导入 COCO instances JSON")
-    public CommonResult<DatasetAnnotationImportResultVO> importCocoPath(
+    public CommonResult<DatasetImageImportTaskRespVO> importCocoPath(
             @PathVariable("datasetId") Long datasetId,
             @Valid @RequestBody DatasetAnnotationCocoImportReqVO reqVO) {
-        return success(datasetAnnotationService.importCocoPath(datasetId, reqVO));
+        String taskId = datasetImageImportTaskService.submitCocoPathImport(datasetId, reqVO);
+        return success(buildProcessingTask(taskId));
+    }
+
+    private static DatasetImageImportTaskRespVO buildProcessingTask(String taskId) {
+        DatasetImageImportTaskRespVO resp = new DatasetImageImportTaskRespVO();
+        resp.setTaskId(taskId);
+        resp.setStatus("processing");
+        return resp;
     }
 
     @GetMapping("/annotation/cloud-datasets")

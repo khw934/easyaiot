@@ -6,22 +6,28 @@ import lombok.Data;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * 图片/压缩包上传结果
- */
-@Schema(description = "图片数据集上传结果")
+@Schema(description = "数据集图片上传结果")
 @Data
 public class DatasetImageUploadRespVO {
 
-    @Schema(description = "成功上传数量")
+    @Schema(description = "成功数量")
     private int successCount;
 
     @Schema(description = "失败数量")
     private int failedCount;
 
-    @Schema(description = "跳过的非图片条目数量")
+    @Schema(description = "跳过数量")
     private int skippedCount;
 
-    @Schema(description = "失败文件及原因（最多返回前 20 条）")
+    @Schema(description = "覆盖数量（同名图片）")
+    private int overwrittenCount;
+
+    @Schema(description = "失败文件列表")
     private List<String> failedFiles = new ArrayList<>();
+
+    @Schema(description = "异步导入任务 ID（importStatus=processing 时返回）")
+    private String importTaskId;
+
+    @Schema(description = "导入状态：processing / completed")
+    private String importStatus;
 }

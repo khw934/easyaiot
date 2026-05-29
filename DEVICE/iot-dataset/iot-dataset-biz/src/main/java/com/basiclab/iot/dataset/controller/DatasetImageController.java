@@ -8,10 +8,16 @@ import com.basiclab.iot.common.domain.R;
 import com.basiclab.iot.common.excels.core.util.ExcelUtils;
 import com.basiclab.iot.common.utils.object.BeanUtils;
 import com.basiclab.iot.dataset.dal.dataobject.DatasetImageDO;
+import com.basiclab.iot.dataset.domain.dataset.vo.DatasetChunkUploadInitReqVO;
+import com.basiclab.iot.dataset.domain.dataset.vo.DatasetChunkUploadInitRespVO;
+import com.basiclab.iot.dataset.domain.dataset.vo.DatasetChunkUploadStatusRespVO;
+import com.basiclab.iot.dataset.domain.dataset.vo.DatasetImageImportTaskRespVO;
 import com.basiclab.iot.dataset.domain.dataset.vo.DatasetImagePageReqVO;
 import com.basiclab.iot.dataset.domain.dataset.vo.DatasetImageRespVO;
 import com.basiclab.iot.dataset.domain.dataset.vo.DatasetImageSaveReqVO;
 import com.basiclab.iot.dataset.domain.dataset.vo.DatasetImageUploadRespVO;
+import com.basiclab.iot.dataset.service.DatasetChunkUploadService;
+import com.basiclab.iot.dataset.service.DatasetImageImportTaskService;
 import com.basiclab.iot.dataset.service.DatasetImageService;
 import io.swagger.annotations.ApiOperation;
 import io.swagger.v3.oas.annotations.Operation;
@@ -46,6 +52,16 @@ public class DatasetImageController {
 
     @Resource
     private DatasetImageService datasetImageService;
+
+    @Resource
+    private DatasetChunkUploadService datasetChunkUploadService;
+
+    @Resource
+    private DatasetImageImportTaskService datasetImageImportTaskService;
+
+    /** 直传上限：小文件可走 /upload，大文件请使用分片上传 */
+    private static final long DIRECT_UPLOAD_IMAGE_MAX = 50L * 1024 * 1024;
+    private static final long DIRECT_UPLOAD_ZIP_MAX = 200L * 1024 * 1024;
 
     @PostMapping("/create")
     @Operation(summary = "创建图片数据集")
@@ -136,14 +152,19 @@ public class DatasetImageController {
             }
         }
 
-        // 验证文件大小
-        long maxSize = Boolean.TRUE.equals(isZip) ? 200 * 1024 * 1024 : 50 * 1024 * 1024;
+        // 直传仅用于小文件；大文件请使用分片上传（最大 200GB）
+        long maxSize = Boolean.TRUE.equals(isZip) ? DIRECT_UPLOAD_ZIP_MAX : DIRECT_UPLOAD_IMAGE_MAX;
         if (file.getSize() > maxSize) {
-            String msg = Boolean.TRUE.equals(isZip) ? "压缩包不能超过200MB" : "图片不能超过50MB";
+            String msg = Boolean.TRUE.equals(isZip)
+                    ? "压缩包超过 200MB 请使用分片上传"
+                    : "图片超过 50MB 请使用分片上传";
             throw exception(FILE_SIZE_EXCEEDED, msg);
         }
 
         DatasetImageUploadRespVO uploadResult = datasetImageService.processUpload(file, datasetId, isZip);
+        if ("processing".equals(uploadResult.getImportStatus())) {
+            return success(uploadResult);
+        }
         if (uploadResult.getSuccessCount() <= 0) {
             String detail = uploadResult.getFailedCount() > 0
                     ? "压缩包内图片均上传失败，请检查文件或存储配置"
@@ -173,6 +194,75 @@ public class DatasetImageController {
                 || "application/x-zip-compressed".equals(normalized)
                 || "application/octet-stream".equals(normalized)
                 || "multipart/x-zip".equals(normalized);
+    }
+
+    @PostMapping("/upload/chunk/init")
+    @Operation(summary = "初始化分片上传（支持断点续传）")
+    public CommonResult<DatasetChunkUploadInitRespVO> initChunkUpload(
+            @Valid @RequestBody DatasetChunkUploadInitReqVO reqVO) {
+        return success(datasetChunkUploadService.initUpload(reqVO));
+    }
+
+    @PostMapping("/upload/chunk")
+    @Operation(summary = "上传单个分片")
+    public CommonResult<Boolean> uploadChunk(
+            @Parameter(description = "上传会话 ID", required = true) @RequestParam("uploadId") String uploadId,
+            @Parameter(description = "分片序号（从 0 开始）", required = true) @RequestParam("chunkIndex") Integer chunkIndex,
+            @Parameter(description = "分片数据", required = true) @RequestParam("chunk") MultipartFile chunk) {
+        datasetChunkUploadService.uploadChunk(uploadId, chunkIndex, chunk);
+        return success(true);
+    }
+
+    @GetMapping("/upload/chunk/status")
+    @Operation(summary = "查询分片上传进度")
+    public CommonResult<DatasetChunkUploadStatusRespVO> getChunkUploadStatus(
+            @Parameter(description = "上传会话 ID", required = true) @RequestParam("uploadId") String uploadId) {
+        return success(datasetChunkUploadService.getUploadStatus(uploadId));
+    }
+
+    @PostMapping("/upload/chunk/complete")
+    @Operation(summary = "完成分片上传并入库")
+    public CommonResult<DatasetImageUploadRespVO> completeChunkUpload(
+            @Parameter(description = "上传会话 ID", required = true) @RequestParam("uploadId") String uploadId) {
+        DatasetImageUploadRespVO uploadResult = datasetChunkUploadService.completeUpload(uploadId);
+        if ("processing".equals(uploadResult.getImportStatus())) {
+            return success(uploadResult);
+        }
+        if (uploadResult.getSuccessCount() <= 0) {
+            String detail = uploadResult.getFailedCount() > 0
+                    ? "压缩包内图片均上传失败，请检查文件或存储配置"
+                    : "压缩包中未找到有效的 JPG/PNG 图片";
+            throw exception(FILE_UPLOAD_FAILED, detail);
+        }
+        CommonResult<DatasetImageUploadRespVO> response = CommonResult.success(uploadResult);
+        if (uploadResult.getFailedCount() > 0) {
+            response.setMsg(String.format("成功上传 %d 个文件，%d 个失败",
+                    uploadResult.getSuccessCount(), uploadResult.getFailedCount()));
+        }
+        return response;
+    }
+
+    @GetMapping("/import-task/{taskId}")
+    @Operation(summary = "查询异步图片导入任务状态")
+    public CommonResult<DatasetImageImportTaskRespVO> getImportTask(
+            @Parameter(description = "导入任务 ID", required = true) @PathVariable("taskId") String taskId) {
+        return success(datasetImageImportTaskService.getTask(taskId));
+    }
+
+    @DeleteMapping("/import-task/{taskId}")
+    @Operation(summary = "取消异步导入任务")
+    public CommonResult<Boolean> cancelImportTask(
+            @Parameter(description = "导入任务 ID", required = true) @PathVariable("taskId") String taskId) {
+        datasetImageImportTaskService.cancelTask(taskId);
+        return success(true);
+    }
+
+    @DeleteMapping("/upload/chunk")
+    @Operation(summary = "取消分片上传")
+    public CommonResult<Boolean> abortChunkUpload(
+            @Parameter(description = "上传会话 ID", required = true) @RequestParam("uploadId") String uploadId) {
+        datasetChunkUploadService.abortUpload(uploadId);
+        return success(true);
     }
 
     @PostMapping("/upload-file")

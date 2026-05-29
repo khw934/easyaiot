@@ -1,53 +1,163 @@
 <template>
   <ConfigProvider :get-popup-container="getModalContainer">
   <div ref="container" class="annotation-container">
-    <!-- 顶栏：进度与操作 -->
+    <!-- 顶栏：工作流 + 标注工具 + 核心操作 -->
     <div class="top-toolbar">
-      <div class="progress-info">
-        <Icon icon="ant-design:picture-outlined"/>
-        <span>进度 <strong>{{ globalImageIndex + 1 }}</strong> / {{ totalImages }}</span>
-        <span v-if="totalImages > 0" class="progress-percent">
-          （已完成 {{ completedCount }}，{{ progressPercent }}%）
+      <div class="toolbar-left">
+        <AnnotationWorkflowBar
+          :total-images="totalImages"
+          :completed-count="completedCount"
+          :usage-allocated="syncCheck.usageAllocated"
+          :annotation-completed="syncCheck.annotationCompleted"
+          :synced-to-minio="syncCheck.syncedToMinio"
+          @action="onWorkflowAction"
+        />
+        <span v-if="totalImages > 0" class="toolbar-progress">
+          第 <strong>{{ globalImageIndex + 1 }}</strong>/{{ totalImages }} 张
+          <span class="progress-percent">· {{ progressPercent }}%</span>
         </span>
         <span v-if="batchTaskRunning" class="batch-task-hint">
           <Icon icon="ant-design:loading-outlined" spin/>
-          批量AI标注进行中…
+          AI 标注中
         </span>
       </div>
-      <div class="top-actions">
-        <div class="tool-group">
+
+      <div class="toolbar-center tool-group">
+        <button
+          v-for="tool in tools"
+          :key="tool.id"
+          type="button"
+          class="tool-button"
+          :class="{ active: activeTool === tool.id }"
+          :title="`${tool.name} (${tool.shortcut})`"
+          @click="setActiveTool(tool.id)"
+        >
+          <Icon :icon="tool.icon"/>
+          <span class="tool-name">{{ tool.name }}</span>
+          <span class="tool-shortcut">{{ tool.shortcut }}</span>
+        </button>
+      </div>
+
+      <div class="toolbar-right">
+        <div class="save-btn-group">
           <button
-            v-for="tool in tools"
-            :key="tool.id"
             type="button"
-            class="tool-button"
-            :class="{ active: activeTool === tool.id }"
-            @click="setActiveTool(tool.id)"
+            class="action-btn action-btn-primary action-btn-save-next"
+            :class="{ 'has-unsaved': !isSaved && totalImages > 0 }"
+            :disabled="saving || totalImages === 0"
+            title="保存当前标注并跳到下一张待标注 (Ctrl+Shift+S)"
+            @click="saveAndJumpToNextPending"
           >
-            <Icon :icon="tool.icon"/>
-            <span>{{ tool.name }} ({{ tool.shortcut }})</span>
+            <Icon icon="ant-design:save-outlined"/>
+            保存并下一张
+            <Icon icon="ant-design:arrow-right-outlined" class="save-next-arrow"/>
+            <span v-if="!isSaved && totalImages > 0" class="unsaved-dot" title="有未保存的修改"/>
+          </button>
+          <button
+            type="button"
+            class="action-btn action-btn-primary action-btn-save-only"
+            :disabled="saving"
+            title="仅保存当前标注 (Ctrl+S)"
+            @click="saveCurrentAnnotations()"
+          >
+            保存
           </button>
         </div>
-        <span class="top-actions-divider"/>
-        <button type="button" class="action-btn import-btn" @click="openImportModal">
-          <Icon icon="ant-design:upload-outlined"/>
-          添加数据集
-        </button>
-        <button type="button" class="action-btn" @click="openExportModal">
-          <Icon icon="ant-design:download-outlined"/>
-          导出数据集
-        </button>
-        <span class="top-actions-divider"/>
-        <button type="button" class="action-btn" :disabled="saving" @click="saveCurrentAnnotations">
-          <Icon icon="ant-design:save-outlined"/>
-          保存标注
-        </button>
         <button type="button" class="action-btn ai-batch-btn" @click="openAiBatchModal">
           <Icon icon="ant-design:robot-outlined"/>
-          批量AI标注
+          AI 标注
+        </button>
+        <span class="top-actions-divider"/>
+        <Dropdown :trigger="['click']" placement="bottomRight">
+          <button type="button" class="action-btn">
+            <Icon icon="ant-design:plus-outlined"/>
+            添加
+            <Icon icon="ant-design:down-outlined" class="dropdown-caret"/>
+          </button>
+          <template #overlay>
+            <Menu @click="onAddMenuClick">
+              <MenuItem key="import">
+                <Icon icon="ant-design:folder-open-outlined"/>
+                导入数据（文件夹 / 格式 / 云平台）
+              </MenuItem>
+              <MenuItem key="upload">
+                <Icon icon="ant-design:picture-outlined"/>
+                上传图片
+              </MenuItem>
+              <MenuItem key="zip">
+                <Icon icon="ant-design:file-zip-outlined"/>
+                上传 ZIP 压缩包
+              </MenuItem>
+              <MenuDivider/>
+              <MenuItem key="frame">
+                <Icon icon="ant-design:video-camera-outlined"/>
+                视频流抽帧任务
+              </MenuItem>
+              <MenuItem key="video">
+                <Icon icon="ant-design:play-square-outlined"/>
+                视频库管理
+              </MenuItem>
+            </Menu>
+          </template>
+        </Dropdown>
+        <Dropdown :trigger="['click']" placement="bottomRight">
+          <button type="button" class="action-btn" :class="{ 'train-ready': syncCheck.syncReady && !syncCheck.syncedToMinio }">
+            <Icon icon="ant-design:export-outlined"/>
+            训练集
+            <span v-if="syncCheck.syncReady && !syncCheck.syncedToMinio" class="ready-badge"/>
+            <Icon icon="ant-design:down-outlined" class="dropdown-caret"/>
+          </button>
+          <template #overlay>
+            <Menu @click="onTrainMenuClick" class="train-menu-overlay">
+              <div v-if="totalImages > 0" class="train-menu-header">
+                <template v-if="!syncCheck.annotationCompleted">
+                  待标注 <strong>{{ pendingCount }}</strong> 张
+                </template>
+                <template v-else-if="!syncCheck.usageAllocated">
+                  标注已完成，待划分用途
+                </template>
+                <template v-else-if="syncCheck.syncReady && !syncCheck.syncedToMinio">
+                  可同步到 Minio
+                </template>
+                <template v-else-if="syncCheck.syncedToMinio">
+                  已同步，可用于训练
+                </template>
+                <template v-else>
+                  划分已完成
+                </template>
+              </div>
+              <MenuItem key="split" :disabled="totalImages === 0 || !syncCheck.annotationCompleted">
+                <Icon icon="ant-design:pie-chart-outlined"/>
+                划分用途 (7:2:1)
+              </MenuItem>
+              <MenuItem key="reset" :disabled="totalImages === 0">
+                <Icon icon="ant-design:reload-outlined"/>
+                重置用途划分
+              </MenuItem>
+              <MenuDivider/>
+              <MenuItem key="export" :disabled="totalImages === 0">
+                <Icon icon="ant-design:download-outlined"/>
+                导出数据集
+              </MenuItem>
+              <MenuItem key="sync" :disabled="!syncCheck.syncReady" :title="syncDisabledReason">
+                <Icon icon="ant-design:cloud-upload-outlined"/>
+                同步到 Minio
+              </MenuItem>
+            </Menu>
+          </template>
+        </Dropdown>
+        <button type="button" class="action-btn" title="标签与数据源管理" @click="openManageDrawer('tags')">
+          <Icon icon="ant-design:setting-outlined"/>
         </button>
       </div>
     </div>
+
+    <AnnotationProgressStrip
+      :total="totalImages"
+      :completed="completedCount"
+      :tip="workflowTip"
+      @tip-action="onTipAction"
+    />
 
     <!-- 主内容区 -->
     <div class="main-content">
@@ -60,6 +170,15 @@
             <span class="stat-total">{{ totalImages }}</span>
             <span v-if="listFilterStatus !== 'all'" class="stat-filtered">· {{ displayImages.length }}</span>
           </div>
+          <button
+            v-if="pendingCount > 0"
+            type="button"
+            class="jump-pending-btn"
+            title="跳到下一张待标注 (N)"
+            @click="jumpToNextPending"
+          >
+            <Icon icon="ant-design:forward-outlined"/>
+          </button>
           <Select
             v-model:value="listFilterStatus"
             size="small"
@@ -98,8 +217,20 @@
             </li>
           </ul>
           <div v-if="displayImages.length === 0" class="image-list-empty">
-            暂无图片
+            <Icon icon="ant-design:inbox-outlined" class="empty-icon"/>
+            <p>暂无图片</p>
+            <p class="empty-hint">从「添加」导入或上传后开始标注</p>
+            <button type="button" class="empty-import-btn" @click="openImportModal">
+              <Icon icon="ant-design:upload-outlined"/>
+              导入数据
+            </button>
           </div>
+        </div>
+        <div v-if="totalImages > 0" class="image-panel-footer">
+          <button type="button" class="panel-footer-btn" @click="openImportModal">
+            <Icon icon="ant-design:plus-outlined"/>
+            添加图片
+          </button>
         </div>
         <Pagination
           v-if="totalPages > 1"
@@ -116,13 +247,36 @@
 
       <!-- 画布区域 -->
       <div class="canvas-area">
-        <div class="image-position-indicator">
-          <div class="position-text">
-            当前图片: <span class="current-index">{{ globalImageIndex + 1 }}</span> /
-            <span class="total-count">{{ totalImages }}</span> <!-- 修改为 totalImages -->
-          </div>
+        <div v-if="totalImages > 0" class="canvas-nav">
+          <button
+            type="button"
+            class="nav-btn"
+            :disabled="globalImageIndex <= 0"
+            title="上一张 (←)"
+            @click="prevImage"
+          >
+            <Icon icon="ant-design:left-outlined"/>
+          </button>
+          <span class="nav-index">{{ globalImageIndex + 1 }} / {{ totalImages }}</span>
+          <button
+            type="button"
+            class="nav-btn"
+            :disabled="globalImageIndex >= totalImages - 1"
+            title="下一张 (→ / 空格)"
+            @click="nextImage"
+          >
+            <Icon icon="ant-design:right-outlined"/>
+          </button>
         </div>
         <div class="canvas-wrapper">
+          <div
+            v-if="totalImages > 0 && labels.length === 0"
+            class="canvas-no-tag-hint"
+          >
+            <Icon icon="ant-design:tags-outlined"/>
+            <span>请先在右侧添加标注类别，再开始框选</span>
+            <button type="button" class="hint-action" @click="focusLabelAdd">去添加</button>
+          </div>
           <canvas
             ref="canvas"
             class="annotation-canvas"
@@ -166,28 +320,21 @@
 
       <!-- 右侧标签栏 -->
       <div class="label-panel">
-        <div class="panel-header">
-          <span>标签管理</span>
-        </div>
-
-        <div class="label-list">
-          <div
-            v-for="(label, index) in labels"
-            :key="label.id"
-            class="label-item"
-            :class="{ active: currentLabelIndex === index }"
-            @click="setCurrentLabel(index)"
-          >
-            <div class="color-badge" :style="{ backgroundColor: label.color }"></div>
-            <div class="label-name">{{ label.name }}</div>
-            <div class="label-shortcut">{{ label.shortcut }}</div>
-          </div>
-        </div>
+        <AnnotationLabelPanel
+          ref="labelPanelRef"
+          :labels="labels"
+          :current-index="currentLabelIndex"
+          :dataset-id="datasetId"
+          @select="setCurrentLabel"
+          @changed="onLabelsChanged"
+          @manage="openManageDrawer('tags')"
+        />
 
         <div class="object-layer-section">
           <div class="panel-header">
-            <i class="fas fa-layer-group"></i>
-            <span>对象图层 ({{ annotations.length }})</span>
+            <Icon icon="ant-design:appstore-outlined"/>
+            <span>对象图层</span>
+            <span class="object-count">{{ annotations.length }}</span>
           </div>
           <div class="object-list">
             <div
@@ -197,7 +344,7 @@
               :class="{ selected: selectedAnnotationId === anno.id }"
               @click="selectAnnotation(anno.id)"
             >
-              <div class="object-color" :style="{ backgroundColor: anno.color }"></div>
+              <div class="object-color" :style="{ backgroundColor: resolveAnnotationColor(anno.label, anno.color) }"></div>
               <div class="object-name">{{ getLabelName(anno.label) }} #{{ index + 1 }}</div>
               <div class="object-actions">
                 <button class="delete-btn" @click.stop="deleteAnnotation(anno.id)">
@@ -228,27 +375,107 @@
       :dataset-labels="labels"
       :get-container="getModalContainer"
     />
+    <DatasetImageModal @register="registerImageModal" @success="onImageUploadSuccess"/>
+    <DatasetManageDrawer
+      v-model:open="manageDrawerOpen"
+      :initial-tab="manageDrawerTab"
+      :get-container="getModalContainer"
+      @tags-changed="fetchLabels"
+    />
   </div>
   </ConfigProvider>
 </template>
 
 <script setup lang="ts">
-import {computed, nextTick, onMounted, onUnmounted, ref, watch} from 'vue';
-import {ConfigProvider, Pagination, Select} from 'ant-design-vue';
+import {computed, nextTick, onMounted, onUnmounted, reactive, ref, watch} from 'vue';
+import {ConfigProvider, Dropdown, Menu, MenuDivider, MenuItem, Pagination, Select} from 'ant-design-vue';
 import {Icon} from '@/components/Icon';
 import {useMessage} from "@/hooks/web/useMessage";
 import {useRoute} from "vue-router";
-import {getDatasetImagePage, getDatasetTagPage, updateDatasetImage} from "@/api/device/dataset";
+import {useModal} from '@/components/Modal';
+import {
+  checkSyncCondition,
+  type DatasetAnnotationImportResult,
+  type DatasetSyncCheckResult,
+  getDataset,
+  getDatasetImagePage,
+  resetDataset,
+  splitDataset,
+  syncToMinio,
+  updateDatasetImage,
+} from "@/api/device/dataset";
+import {
+  colorWithAlpha,
+  fetchDatasetTags,
+  syncTagsFromImport,
+  type DatasetTagItem,
+} from '@/views/dataset/components/AnnotationTool/datasetTagUtils';
+
+/** 标注框描边宽度 */
+const ANNOTATION_STROKE_WIDTH = 2;
+const ANNOTATION_SELECTED_STROKE_WIDTH = 2.5;
+/** 标注框填充透明度（高度透明） */
+const ANNOTATION_FILL_ALPHA = 0.1;
 import { getAutoLabelTask } from '@/api/device/auto-label';
 import AILabelModal from '@/views/dataset/components/AutoLabel/AILabelModal/index.vue';
 import ImportDatasetModal from '@/views/dataset/components/AutoLabel/ImportDatasetModal/index.vue';
 import ExportDatasetModal from '@/views/dataset/components/AutoLabel/ExportDatasetModal/index.vue';
-
+import DatasetImageModal from '@/views/dataset/components/DatasetImageModal/index.vue';
+import DatasetManageDrawer, {
+  type ManageDrawerTab,
+} from '@/views/dataset/components/AnnotationTool/DatasetManageDrawer.vue';
+import AnnotationWorkflowBar, {
+  type WorkflowStepKey,
+} from '@/views/dataset/components/AnnotationTool/AnnotationWorkflowBar.vue';
+import AnnotationProgressStrip, {
+  type TipAction,
+  type WorkflowTip,
+} from '@/views/dataset/components/AnnotationTool/AnnotationProgressStrip.vue';
+import AnnotationLabelPanel from '@/views/dataset/components/AnnotationTool/AnnotationLabelPanel.vue';
 defineOptions({name: 'AnnotationTool'});
 
 const {createMessage, createConfirm} = useMessage();
 const route = useRoute();
 const datasetId = computed(() => Number(route.params['id']));
+const manageDrawerOpen = ref(false);
+const manageDrawerTab = ref<ManageDrawerTab>('tags');
+const [registerImageModal, {openModal: openImageUploadModalInner}] = useModal();
+const labelPanelRef = ref<InstanceType<typeof AnnotationLabelPanel> | null>(null);
+
+const defaultSyncCheck = (): DatasetSyncCheckResult & { syncedToMinio: boolean } => ({
+  usageAllocated: false,
+  annotationCompleted: false,
+  syncReady: false,
+  totalImages: 0,
+  unallocatedCount: 0,
+  unannotatedCount: 0,
+  syncedToMinio: false,
+});
+
+const syncCheck = reactive(defaultSyncCheck());
+
+function parseSyncCheckPayload(raw: unknown): DatasetSyncCheckResult {
+  const data = (raw as { data?: DatasetSyncCheckResult })?.data ?? (raw as DatasetSyncCheckResult);
+  return {
+    usageAllocated: !!data?.usageAllocated,
+    annotationCompleted: !!data?.annotationCompleted,
+    syncReady: !!data?.syncReady,
+    totalImages: data?.totalImages ?? 0,
+    unallocatedCount: data?.unallocatedCount ?? 0,
+    unannotatedCount: data?.unannotatedCount ?? 0,
+  };
+}
+
+async function refreshSyncCheck() {
+  try {
+    const ret = await checkSyncCondition(route.params.id);
+    Object.assign(syncCheck, parseSyncCheckPayload(ret));
+    const datasetInfo = await getDataset({id: route.params.id});
+    syncCheck.syncedToMinio = datasetInfo?.isSyncMinio === 1 || !!datasetInfo?.zipUrl;
+  } catch {
+    Object.assign(syncCheck, defaultSyncCheck());
+  }
+}
 const aiLabelModalRef = ref<InstanceType<typeof AILabelModal> | null>(null);
 const importModalRef = ref<InstanceType<typeof ImportDatasetModal> | null>(null);
 const exportModalRef = ref<InstanceType<typeof ExportDatasetModal> | null>(null);
@@ -300,6 +527,42 @@ const globalImageIndex = computed(() => {
 const progressPercent = computed(() => {
   if (totalImages.value <= 0) return 0;
   return Math.round((completedCount.value / totalImages.value) * 100);
+});
+
+const pendingCount = computed(() => {
+  if (syncCheck.unannotatedCount > 0) return syncCheck.unannotatedCount;
+  return Math.max(0, totalImages.value - completedCount.value);
+});
+
+const syncDisabledReason = computed(() => {
+  if (syncCheck.syncReady) return '';
+  if (totalImages.value === 0) return '请先导入图片';
+  if (!syncCheck.annotationCompleted) return `尚有 ${pendingCount.value} 张未完成标注`;
+  if (!syncCheck.usageAllocated) return '请先划分数据集用途';
+  return '';
+});
+
+const workflowTip = computed((): WorkflowTip | null => {
+  if (totalImages.value === 0) {
+    return {text: '数据集为空，请先导入或上传图片', action: 'import', actionLabel: '去导入'};
+  }
+  if (!syncCheck.annotationCompleted) {
+    return {
+      text: `还有 ${pendingCount.value} 张待完成标注`,
+      action: 'nextPending',
+      actionLabel: '跳到下一张待标注',
+    };
+  }
+  if (!syncCheck.usageAllocated) {
+    return {text: '标注已全部完成，请划分训练/验证/测试集', action: 'split', actionLabel: '划分用途'};
+  }
+  if (syncCheck.syncReady && !syncCheck.syncedToMinio) {
+    return {text: '数据集已就绪，可同步到 Minio 用于模型训练', action: 'sync', actionLabel: '同步 Minio'};
+  }
+  if (syncCheck.syncedToMinio) {
+    return {text: '已同步到 Minio，可用于模型训练'};
+  }
+  return null;
 });
 
 const listPhantomHeight = computed(() => displayImages.value.length * LIST_ITEM_HEIGHT);
@@ -378,8 +641,10 @@ const onListChunkPageChange = async (page: number) => {
 const shortcutHints = ref<{ key: string, text: string }[]>([
   {key: 'Del', text: '删除'},
   {key: 'Ctrl+S', text: '保存'},
+  {key: 'Ctrl+Shift+S', text: '保存并下一张'},
   {key: 'Space', text: '下一张'},
   {key: '←→', text: '切图'},
+  {key: 'N', text: '待标注'},
   {key: '1-9', text: '标签'},
   {key: '滚轮', text: '缩放'},
   {key: 'Ctrl+Z', text: '撤销'},
@@ -472,7 +737,7 @@ const activeTool = ref<string>(ToolType.SELECT);
 const tools = ref<Tool[]>([
   {id: ToolType.SELECT, name: '选择', icon: 'mage:mouse-pointer', shortcut: 'V'},
   {id: ToolType.RECTANGLE, name: '矩形', icon: 'uil:vector-square', shortcut: 'R'},
-  {id: ToolType.POLYGON, name: '多边形', icon: 'fa-solid:draw-polygon', shortcut: 'P'}
+  {id: ToolType.POLYGON, name: '多边形', icon: 'fa-solid:draw-polygon', shortcut: 'P'},
 ]);
 
 // 图片显示尺寸
@@ -540,12 +805,23 @@ const loadImage = (src: string) => {
   img.src = src;
 };
 
+const findLabelByKey = (labelKey: string): Label | undefined => {
+  const key = String(labelKey);
+  return labels.value.find((l) => String(l.shortcut) === key)
+    ?? labels.value.find((l) => l.name === key);
+};
+
 const getLabelName = (shortcut: string): string => {
-  let label = labels.value.find(l => String(l.shortcut) === shortcut);
-  if (label == null || label == undefined) {
-    label = labels.value.find(l => String(l.name) === shortcut);
-  }
+  const label = findLabelByKey(shortcut);
   return label ? label.name : '未知标签';
+};
+
+/** 绘制与图层面板统一使用标签定义色，避免历史/导入数据中的 color 与右侧标签不一致 */
+const resolveAnnotationColor = (labelKey: string, storedColor?: string): string => {
+  const label = findLabelByKey(labelKey);
+  if (label?.color) return label.color;
+  if (storedColor) return storedColor;
+  return '#4361ee';
 };
 
 watch(listFilterStatus, () => {
@@ -558,6 +834,13 @@ watch(currentImageIndex, () => {
   scrollListToActive();
 });
 
+function normalizeLoadedAnnotations(raw: Annotation[]): Annotation[] {
+  return raw.map((anno) => ({
+    ...anno,
+    color: resolveAnnotationColor(anno.label, anno.color),
+  }));
+}
+
 watch(currentImage, (newImage) => {
   if (newImage.path) {
     loadImage(newImage.path);
@@ -565,17 +848,24 @@ watch(currentImage, (newImage) => {
     // 加载当前图片的标注
     if (typeof newImage.annotations === 'string') {
       try {
-        annotations.value = JSON.parse(newImage.annotations);
+        annotations.value = normalizeLoadedAnnotations(JSON.parse(newImage.annotations));
       } catch (e) {
         createMessage.error('标注解析失败');
         annotations.value = [];
       }
     } else {
-      annotations.value = [...newImage.annotations];
+      annotations.value = normalizeLoadedAnnotations([...newImage.annotations]);
     }
     isSaved.value = true;
   }
 }, {immediate: true});
+
+watch(labels, () => {
+  if (annotations.value.length > 0) {
+    annotations.value = normalizeLoadedAnnotations(annotations.value);
+    draw();
+  }
+});
 
 // 检查图片是否有标注
 const hasAnnotations = (image: Image) => {
@@ -671,6 +961,37 @@ const prevImage = async (): Promise<void> => {
   }
 };
 
+/** 跳到下一张未完成标注的图片，返回是否成功跳转 */
+const jumpToNextPending = async (): Promise<boolean> => {
+  if (totalImages.value === 0) {
+    openImportModal();
+    return false;
+  }
+
+  for (let i = currentImageIndex.value + 1; i < images.value.length; i++) {
+    if (images.value[i].completed !== 1) {
+      await selectImageInList(images.value[i]);
+      return true;
+    }
+  }
+
+  for (let g = globalImageIndex.value + 1; g < totalImages.value; g++) {
+    await selectImage(g);
+    if (currentImage.value.completed !== 1) {
+      return true;
+    }
+  }
+
+  for (let g = 0; g < globalImageIndex.value; g++) {
+    await selectImage(g);
+    if (currentImage.value.completed !== 1) {
+      return true;
+    }
+  }
+
+  createMessage.success('全部图片已标注完成');
+  return false;
+};
 
 // 更新图片状态
 const updateImageStatus = (modified: boolean = true) => {
@@ -703,44 +1024,46 @@ const undo = () => {
   }
 };
 
-// 从后端分页获取标签数据
+// 从后端获取标签（无默认占位标签）
 const fetchLabels = async (): Promise<void> => {
   try {
-    const pageSize = 100;
-    let allLabels: Label[] = [];
-
-    const res = await getDatasetTagPage({
-      datasetId: route.params['id'],
-      pageNo: 1,
-      pageSize: pageSize
-    });
-
-    if (res?.list) {
-      // 确保shortcut转换为字符串
-      const pageLabels = res.list.map((tag: any) => ({
-        id: tag.id,
-        name: tag.name,
-        color: tag.color,
-        shortcut: String(tag.shortcut) // 关键转换
-      }));
-      allLabels = [...allLabels, ...pageLabels];
+    const list: DatasetTagItem[] = await fetchDatasetTags(route.params['id']);
+    labels.value = list.map((tag) => ({
+      id: tag.id,
+      name: tag.name,
+      color: tag.color,
+      shortcut: tag.shortcut,
+    }));
+    if (labels.value.length > 0 && currentLabelIndex.value >= labels.value.length) {
+      currentLabelIndex.value = 0;
     }
-
-    if (allLabels.length > 0) {
-      labels.value = allLabels;
-    } else {
-      throw new Error("未获取到标签数据");
-    }
-  } catch (error) {
-    // 默认标签也确保shortcut是字符串
-    labels.value = [
-      {id: 1, name: '人物', color: '#FF5252', shortcut: '1'},
-      {id: 2, name: '车辆', color: '#4CAF50', shortcut: '2'},
-      {id: 3, name: '动物', color: '#FFC107', shortcut: '3'},
-    ];
+  } catch {
+    labels.value = [];
     currentLabelIndex.value = 0;
   }
 };
+
+/** 导入后刷新标签：优先后端 import 响应，仅在无 tagsCreated/classes 时前端兜底扫描 */
+async function syncTagsAfterImport(importResult?: DatasetAnnotationImportResult): Promise<void> {
+  const tagsCreated = importResult?.tagsCreated ?? 0;
+  const classNames =
+    importResult?.classes ??
+    (importResult as { class_names?: string[] })?.class_names;
+
+  if (tagsCreated > 0 || (classNames && classNames.length > 0)) {
+    await fetchLabels();
+    if (tagsCreated > 0) {
+      createMessage.success(`已从导入数据创建 ${tagsCreated} 个标签`);
+    }
+    return;
+  }
+
+  const created = await syncTagsFromImport(route.params['id'], {classNames});
+  await fetchLabels();
+  if (created > 0) {
+    createMessage.success(`已从导入数据创建 ${created} 个标签`);
+  }
+}
 
 const mapImageRow = (img: any): Image => {
   let rowAnnotations: Annotation[] | string = [];
@@ -835,62 +1158,93 @@ const formatDateTime = (date: Date | null): string => {
   }).format(date);
 };
 
+type SaveOptions = {
+  /** 保存成功后跳到下一张待标注 */
+  jumpToNextPending?: boolean;
+  /** 不弹出成功提示（用于保存并下一张，避免连弹两条） */
+  quiet?: boolean;
+};
+
 // 保存当前标注
-const saveCurrentAnnotations = async (): Promise<void> => {
-  if (saving.value) return;
-  saving.value = true;
+const saveCurrentAnnotations = async (options?: SaveOptions): Promise<boolean> => {
+  if (saving.value) return false;
 
   if (annotations.value.length === 0) {
     createMessage.warning('请至少标注一个对象');
-    saving.value = false;
-    return;
+    return false;
   }
 
-  saving.value = true; // 加锁
+  saving.value = true;
 
   try {
     const updatedStatus = {
       completed: 1 as 0 | 1,
       modificationCount: currentImage.value.modificationCount + 1,
-      lastModified: new Date()
+      lastModified: new Date(),
     };
 
     const requestData: SaveAnnotationRequest = {
       id: currentImage.value.id,
       name: currentImage.value.name,
       annotations: JSON.stringify(annotations.value),
-      ...updatedStatus
+      ...updatedStatus,
     };
 
-    // 使用单一await处理保存操作
     await saveAnnotationsToDB(requestData);
 
-    // 更新当前图片状态
     const currentId = currentImage.value.id;
-    const imageIndex = images.value.findIndex(img => img.id === currentId);
+    const imageIndex = images.value.findIndex((img) => img.id === currentId);
     if (imageIndex !== -1) {
       images.value[imageIndex] = {
         ...images.value[imageIndex],
         ...updatedStatus,
-        annotations: requestData.annotations
+        annotations: requestData.annotations,
       };
     }
 
-    // 更新标注缓存
     try {
       imageAnnotations.value[currentId] = JSON.parse(requestData.annotations);
-    } catch (e) {
+    } catch {
       imageAnnotations.value[currentId] = [];
     }
 
-    // 仅显示一次成功提示
-    createMessage.success('标注保存成功');
+    if (!options?.quiet) {
+      createMessage.success('标注保存成功');
+    }
     isSaved.value = true;
     await fetchCompletedCount();
+    await refreshSyncCheck();
+
+    if (options?.jumpToNextPending) {
+      await jumpToNextPending();
+    }
+    return true;
   } catch (error) {
     createMessage.error('保存失败:' + error);
+    return false;
   } finally {
-    saving.value = false; // 解锁
+    saving.value = false;
+  }
+};
+
+/** 保存并跳到下一张待标注（已保存且已完成时仅跳转） */
+const saveAndJumpToNextPending = async (): Promise<void> => {
+  if (saving.value || totalImages.value === 0) return;
+
+  if (annotations.value.length === 0) {
+    createMessage.warning('请至少标注一个对象');
+    return;
+  }
+
+  const alreadySaved = isSaved.value && currentImage.value.completed === 1;
+  if (alreadySaved) {
+    await jumpToNextPending();
+    return;
+  }
+
+  const saved = await saveCurrentAnnotations({jumpToNextPending: true, quiet: true});
+  if (saved) {
+    createMessage.success('已保存并跳到下一张待标注');
   }
 };
 
@@ -1025,24 +1379,18 @@ const drawAnnotation = (annotation: Annotation): void => {
   if (!ctx.value || !imageDisplaySize.value) return;
 
   const {x: imgX, y: imgY, width: imgWidth, height: imgHeight} = imageDisplaySize.value;
+  const color = resolveAnnotationColor(annotation.label, annotation.color);
+  const isSelected = annotation.id === selectedAnnotationId.value;
 
-  // 转换归一化坐标为实际坐标
   const toCanvasCoords = (point: Point) => ({
     x: imgX + point.x * imgWidth,
     y: imgY + point.y * imgHeight
   });
 
   ctx.value.save();
-  ctx.value.strokeStyle = annotation.color;
-  ctx.value.lineWidth = 2;
-  ctx.value.fillStyle = annotation.color + '20';
-
-  const isSelected = annotation.id === selectedAnnotationId.value;
-
-  if (isSelected) {
-    ctx.value.strokeStyle = '#ffffff';
-    ctx.value.lineWidth = 3;
-  }
+  ctx.value.strokeStyle = color;
+  ctx.value.lineWidth = isSelected ? ANNOTATION_SELECTED_STROKE_WIDTH : ANNOTATION_STROKE_WIDTH;
+  ctx.value.fillStyle = colorWithAlpha(color, ANNOTATION_FILL_ALPHA);
 
   if (annotation.points.length > 0) {
     const startPoint = toCanvasCoords(annotation.points[0]);
@@ -1061,16 +1409,7 @@ const drawAnnotation = (annotation: Annotation): void => {
 
     ctx.value.fill();
     ctx.value.stroke();
-
-    if (annotation.points.length > 0) {
-      drawAnnotationLabel(
-        annotation,
-        annotation.points[0].x,
-        annotation.points[0].y
-      );
-    }
-
-    drawAnnotationLabel(annotation, startPoint.x, startPoint.y);
+    drawAnnotationLabel(annotation, startPoint.x, startPoint.y, color);
   }
 
   ctx.value.restore();
@@ -1088,10 +1427,11 @@ const drawCurrentAnnotation = (): void => {
     y: imgY + point.y * imgHeight
   });
 
+  const draftColor = currentLabel.value?.color ?? '#4361ee';
   ctx.value.save();
-  ctx.value.strokeStyle = currentLabel.value.color;
-  ctx.value.lineWidth = 2;
-  ctx.value.fillStyle = currentLabel.value.color + '40';
+  ctx.value.strokeStyle = draftColor;
+  ctx.value.lineWidth = ANNOTATION_STROKE_WIDTH;
+  ctx.value.fillStyle = colorWithAlpha(draftColor, ANNOTATION_FILL_ALPHA);
 
   switch (activeTool.value) {
     case ToolType.RECTANGLE:
@@ -1108,8 +1448,8 @@ const drawCurrentAnnotation = (): void => {
       drawAnnotationLabel({
         id: 0,
         type: AnnotationType.RECTANGLE,
-        label: currentLabel.value.name,
-        color: currentLabel.value.color,
+        label: currentLabel.value.shortcut,
+        color: draftColor,
         points: [
           {x: currentPoints.value[0].x, y: currentPoints.value[0].y},
           {x: currentPoints.value[0].x + width / imgWidth, y: currentPoints.value[0].y},
@@ -1119,7 +1459,7 @@ const drawCurrentAnnotation = (): void => {
           },
           {x: currentPoints.value[0].x, y: currentPoints.value[0].y + height / imgHeight}
         ]
-      }, rectStart.x, rectStart.y);
+      }, rectStart.x, rectStart.y, draftColor);
       break;
 
     case ToolType.POLYGON:
@@ -1137,7 +1477,7 @@ const drawCurrentAnnotation = (): void => {
         ctx.value.lineTo(currentPoint.x, currentPoint.y);
         ctx.value.stroke();
 
-        ctx.value.fillStyle = currentLabel.value.color;
+        ctx.value.fillStyle = draftColor;
         currentPoints.value.forEach(point => {
           const canvasPoint = toCanvasCoords(point);
           ctx.value.beginPath();
@@ -1151,21 +1491,30 @@ const drawCurrentAnnotation = (): void => {
   ctx.value.restore();
 };
 
-// 绘制标注
-const drawAnnotationLabel = (annotation: Annotation, x: number, y: number): void => {
+// 绘制标注名称标签
+const drawAnnotationLabel = (
+  annotation: Annotation,
+  x: number,
+  y: number,
+  color?: string,
+): void => {
   if (!ctx.value) return;
 
-  ctx.value.save();
-  ctx.value.fillStyle = annotation.color;
-  ctx.value.font = '14px Inter';
-
-  // 使用getLabelName方法获取标签名称
+  const labelColor = color ?? resolveAnnotationColor(annotation.label, annotation.color);
   const labelName = getLabelName(annotation.label);
-  const textWidth = ctx.value.measureText(labelName).width;
 
-  ctx.value.fillRect(x - 2, y - 25, textWidth + 10, 20);
-  ctx.value.fillStyle = 'white';
-  ctx.value.fillText(labelName, x + 3, y - 10); // 使用标签名称显示
+  ctx.value.save();
+  ctx.value.font = '12px Inter, sans-serif';
+  const textWidth = ctx.value.measureText(labelName).width;
+  const padX = 4;
+  const padY = 2;
+  const boxH = 16;
+  const boxW = textWidth + padX * 2;
+
+  ctx.value.fillStyle = colorWithAlpha(labelColor, 0.85);
+  ctx.value.fillRect(x, y - boxH - 4, boxW, boxH);
+  ctx.value.fillStyle = '#fff';
+  ctx.value.fillText(labelName, x + padX, y - 6);
 
   ctx.value.restore();
 };
@@ -1408,9 +1757,13 @@ const handleKeyDown = (e: KeyboardEvent): void => {
   }
 
   if (e.ctrlKey) {
-    if (e.key === 's') {
+    if (e.key === 's' || e.key === 'S') {
       e.preventDefault();
-      saveCurrentAnnotations();
+      if (e.shiftKey) {
+        saveAndJumpToNextPending();
+      } else {
+        saveCurrentAnnotations();
+      }
     } else if (e.key === 'z') {
       e.preventDefault();
       undo();
@@ -1455,7 +1808,8 @@ const handleKeyDown = (e: KeyboardEvent): void => {
       break;
     case 'n':
     case 'N':
-      nextImage();
+      e.preventDefault();
+      jumpToNextPending();
       break;
     case 'b':
     case 'B':
@@ -1491,9 +1845,182 @@ function openExportModal(): void {
   exportModalRef.value?.openModal();
 }
 
-async function onImportSuccess(): Promise<void> {
+function openImageUploadModal(isZip = false): void {
+  openImageUploadModalInner(true, {
+    datasetId: route.params['id'],
+    isImage: !isZip,
+    isZip,
+    isVideo: false,
+    isStream: false,
+  });
+}
+
+function openManageDrawer(tab: ManageDrawerTab = 'tags'): void {
+  manageDrawerTab.value = tab;
+  manageDrawerOpen.value = true;
+}
+
+function onWorkflowAction(key: WorkflowStepKey): void {
+  switch (key) {
+    case 'import':
+      openImportModal();
+      break;
+    case 'annotate':
+      if (pendingCount.value > 0) {
+        listFilterStatus.value = 'pending';
+        jumpToNextPending();
+      }
+      break;
+    case 'split':
+      handleSplitDataset();
+      break;
+    case 'sync':
+      handleSyncToMinio();
+      break;
+  }
+}
+
+function onTipAction(action: TipAction): void {
+  switch (action) {
+    case 'import':
+      openImportModal();
+      break;
+    case 'nextPending':
+      jumpToNextPending();
+      break;
+    case 'split':
+      handleSplitDataset();
+      break;
+    case 'sync':
+      handleSyncToMinio();
+      break;
+    case 'filterPending':
+      listFilterStatus.value = 'pending';
+      break;
+  }
+}
+
+function onAddMenuClick({key}: { key: string }): void {
+  switch (key) {
+    case 'import':
+      openImportModal();
+      break;
+    case 'upload':
+      openImageUploadModal(false);
+      break;
+    case 'zip':
+      openImageUploadModal(true);
+      break;
+    case 'frame':
+      openManageDrawer('frame');
+      break;
+    case 'video':
+      openManageDrawer('video');
+      break;
+  }
+}
+
+function onTrainMenuClick({key}: { key: string }): void {
+  switch (key) {
+    case 'split':
+      handleSplitDataset();
+      break;
+    case 'reset':
+      handleResetDataset();
+      break;
+    case 'export':
+      openExportModal();
+      break;
+    case 'sync':
+      handleSyncToMinio();
+      break;
+  }
+}
+
+function focusLabelAdd(): void {
+  labelPanelRef.value?.focusAddInput();
+}
+
+async function onLabelsChanged(addedName?: string): Promise<void> {
+  await fetchLabels();
+  if (addedName) {
+    const idx = labels.value.findIndex((l) => l.name === addedName);
+    if (idx >= 0) setCurrentLabel(idx);
+    else if (labels.value.length > 0) setCurrentLabel(labels.value.length - 1);
+  }
+}
+
+async function onImageUploadSuccess(): Promise<void> {
   listChunkPage.value = 1;
   await fetchImages(1);
+  await syncTagsAfterImport();
+  await refreshSyncCheck();
+}
+
+function handleSplitDataset(): void {
+  createConfirm({
+    iconType: 'warning',
+    title: '按比例划分数据集用途？',
+    content: '将按 7:2:1 划分为训练集、验证集、测试集。',
+    onOk: async () => {
+      try {
+        await splitDataset(route.params.id, {trainRatio: 0.7, valRatio: 0.2, testRatio: 0.1});
+        createMessage.success('数据集划分成功');
+        await refreshSyncCheck();
+      } catch {
+        createMessage.error('数据集划分失败');
+      }
+    },
+  });
+}
+
+function handleResetDataset(): void {
+  createConfirm({
+    iconType: 'warning',
+    title: '重置数据集用途？',
+    content: '将清除所有图片的训练/验证/测试集划分。',
+    onOk: async () => {
+      try {
+        await resetDataset(route.params.id);
+        createMessage.success('数据集用途已重置');
+        await refreshSyncCheck();
+      } catch {
+        createMessage.error('重置数据集用途失败');
+      }
+    },
+  });
+}
+
+function handleSyncToMinio(): void {
+  createConfirm({
+    iconType: 'info',
+    title: '同步数据集到 Minio？',
+    onOk: async () => {
+      try {
+        await refreshSyncCheck();
+        if (!syncCheck.usageAllocated) {
+          createMessage.error('请先划分数据集用途后再同步');
+          return;
+        }
+        if (!syncCheck.annotationCompleted) {
+          createMessage.error(`尚有 ${syncCheck.unannotatedCount} 张图片未完成标注`);
+          return;
+        }
+        await syncToMinio(route.params.id);
+        createMessage.success('数据集已同步到 Minio');
+        await refreshSyncCheck();
+      } catch {
+        createMessage.error('同步数据集失败');
+      }
+    },
+  });
+}
+
+async function onImportSuccess(importResult?: DatasetAnnotationImportResult): Promise<void> {
+  listChunkPage.value = 1;
+  await fetchImages(1);
+  await syncTagsAfterImport(importResult);
+  await refreshSyncCheck();
 }
 
 function stopBatchTaskPoll(): void {
@@ -1549,6 +2076,7 @@ onMounted(() => {
 
   fetchLabels();
   fetchImages(1);
+  refreshSyncCheck();
 });
 
 onUnmounted(() => {
@@ -1584,62 +2112,101 @@ onUnmounted(() => {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 8px 16px;
+    gap: 12px;
+    padding: 8px 12px;
     background: #fff;
     border-bottom: 1px solid #e8e8e8;
     flex-shrink: 0;
+    flex-wrap: wrap;
 
-    .progress-info {
+    .toolbar-left {
       display: flex;
       align-items: center;
-      gap: 8px;
-      font-size: 14px;
-      color: #333;
+      gap: 12px;
       min-width: 0;
       flex: 1;
       flex-wrap: wrap;
+    }
+
+    .toolbar-progress {
+      font-size: 13px;
+      color: #595959;
+      white-space: nowrap;
 
       strong {
         color: @primary-color;
       }
 
-      .batch-task-hint {
-        margin-left: 12px;
-        color: @warning-color;
-        font-size: 13px;
-      }
-
       .progress-percent {
-        color: #6b7a90;
+        color: #8c8c8c;
         font-size: 12px;
       }
     }
 
-    .top-actions {
+    .batch-task-hint {
+      font-size: 12px;
+      color: @warning-color;
+      white-space: nowrap;
+    }
+
+    .toolbar-center.tool-group {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+
+    .toolbar-right {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+      flex-wrap: wrap;
+    }
+
+    .save-btn-group {
+      display: inline-flex;
+      align-items: stretch;
+      border-radius: 6px;
+      overflow: hidden;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+
+      .action-btn-primary {
+        border-radius: 0;
+        margin: 0;
+      }
+
+      .action-btn-save-next {
+        border-right: 1px solid rgba(255, 255, 255, 0.25);
+        padding-right: 10px;
+
+        .save-next-arrow {
+          font-size: 11px;
+          opacity: 0.85;
+        }
+      }
+
+      .action-btn-save-only {
+        padding: 6px 10px;
+        font-size: 12px;
+        min-width: auto;
+        opacity: 0.92;
+      }
     }
 
     .top-actions-divider {
       width: 1px;
-      height: 24px;
+      height: 22px;
       background: #e8e8e8;
-      margin: 0 4px;
+      margin: 0 2px;
       flex-shrink: 0;
-    }
-
-    .tool-group {
-      display: flex;
-      align-items: center;
-      gap: 6px;
     }
 
     .tool-button {
       display: inline-flex;
       align-items: center;
-      gap: 6px;
-      padding: 6px 12px;
+      gap: 4px;
+      padding: 6px 10px;
       border-radius: 6px;
       border: 1px solid #d9d9d9;
       background: #fff;
@@ -1647,6 +2214,14 @@ onUnmounted(() => {
       color: @gray-color;
       cursor: pointer;
       transition: all 0.2s;
+
+      .tool-shortcut {
+        font-size: 11px;
+        padding: 0 4px;
+        background: #f0f0f0;
+        border-radius: 3px;
+        color: #8c8c8c;
+      }
 
       &:hover {
         border-color: @primary-color;
@@ -1657,14 +2232,25 @@ onUnmounted(() => {
         background: fade(@primary-color, 10%);
         border-color: @primary-color;
         color: @primary-color;
+
+        .tool-shortcut {
+          background: fade(@primary-color, 15%);
+          color: @primary-color;
+        }
       }
+    }
+
+    .dropdown-caret {
+      font-size: 10px;
+      margin-left: 2px;
+      opacity: 0.6;
     }
 
     .action-btn {
       display: inline-flex;
       align-items: center;
-      gap: 6px;
-      padding: 6px 14px;
+      gap: 5px;
+      padding: 6px 12px;
       border-radius: 6px;
       border: 1px solid #d9d9d9;
       background: #fff;
@@ -1683,15 +2269,44 @@ onUnmounted(() => {
         cursor: not-allowed;
       }
 
-      &.import-btn {
+      &.action-btn-primary {
         background: @primary-color;
         border-color: @primary-color;
         color: #fff;
+        font-weight: 500;
+        position: relative;
 
         &:hover:not(:disabled) {
-          opacity: 0.9;
+          opacity: 0.92;
           border-color: @primary-color;
           color: #fff;
+        }
+
+        &.has-unsaved {
+          box-shadow: 0 0 0 2px fade(@warning-color, 35%);
+        }
+
+        .unsaved-dot {
+          width: 6px;
+          height: 6px;
+          border-radius: 50%;
+          background: @warning-color;
+          flex-shrink: 0;
+        }
+      }
+
+      &.train-ready {
+        border-color: #52c41a;
+        position: relative;
+
+        .ready-badge {
+          position: absolute;
+          top: 2px;
+          right: 2px;
+          width: 6px;
+          height: 6px;
+          border-radius: 50%;
+          background: #52c41a;
         }
       }
 
@@ -1706,6 +2321,7 @@ onUnmounted(() => {
           color: #d48806;
         }
       }
+
     }
   }
 
@@ -1729,9 +2345,29 @@ onUnmounted(() => {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 8px;
+      gap: 6px;
       padding: 10px 10px 8px;
       flex-shrink: 0;
+    }
+
+    .jump-pending-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 26px;
+      height: 26px;
+      padding: 0;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 6px;
+      background: fade(@primary-color, 20%);
+      color: #a8b8ff;
+      cursor: pointer;
+      flex-shrink: 0;
+
+      &:hover {
+        background: fade(@primary-color, 35%);
+        border-color: @primary-color;
+      }
     }
 
     :deep(.ant-select-selector) {
@@ -1890,11 +2526,71 @@ onUnmounted(() => {
       position: absolute;
       inset: 0;
       display: flex;
+      flex-direction: column;
       align-items: center;
       justify-content: center;
+      gap: 6px;
+      padding: 16px;
+      text-align: center;
       color: #6b7a90;
       font-size: 13px;
-      pointer-events: none;
+
+      .empty-icon {
+        font-size: 36px;
+        opacity: 0.5;
+        margin-bottom: 4px;
+      }
+
+      .empty-hint {
+        margin: 0;
+        font-size: 12px;
+        color: #5a6a80;
+      }
+
+      .empty-import-btn {
+        margin-top: 8px;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 14px;
+        border-radius: 6px;
+        border: 1px solid @primary-color;
+        background: fade(@primary-color, 15%);
+        color: #a8b8ff;
+        cursor: pointer;
+        font-size: 13px;
+
+        &:hover {
+          background: fade(@primary-color, 28%);
+        }
+      }
+    }
+
+    .image-panel-footer {
+      padding: 8px 10px;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      flex-shrink: 0;
+
+      .panel-footer-btn {
+        width: 100%;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        padding: 6px 0;
+        border: 1px dashed rgba(255, 255, 255, 0.2);
+        border-radius: 6px;
+        background: transparent;
+        color: #9aa8bc;
+        font-size: 12px;
+        cursor: pointer;
+
+        &:hover {
+          border-color: @primary-color;
+          color: @primary-color;
+          background: fade(@primary-color, 8%);
+        }
+      }
     }
 
     .image-list-pagination {
@@ -1933,6 +2629,50 @@ onUnmounted(() => {
     position: relative;
     min-width: 0;
     overflow: hidden;
+
+    .canvas-nav {
+      position: absolute;
+      top: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 15;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 8px;
+      background: rgba(0, 0, 0, 0.65);
+      border-radius: 20px;
+      backdrop-filter: blur(6px);
+
+      .nav-index {
+        font-size: 13px;
+        color: #e8edf5;
+        min-width: 64px;
+        text-align: center;
+      }
+
+      .nav-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 32px;
+        height: 32px;
+        border: none;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.1);
+        color: #fff;
+        cursor: pointer;
+
+        &:hover:not(:disabled) {
+          background: fade(@primary-color, 50%);
+        }
+
+        &:disabled {
+          opacity: 0.35;
+          cursor: not-allowed;
+        }
+      }
+    }
 
     .image-position-indicator {
       position: absolute;
@@ -1976,6 +2716,40 @@ onUnmounted(() => {
       overflow: auto;
       padding: 20px;
       max-width: 100%;
+      position: relative;
+
+      .canvas-no-tag-hint {
+        position: absolute;
+        top: 56px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 18;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 14px;
+        background: rgba(0, 0, 0, 0.72);
+        color: #e8edf5;
+        border-radius: 6px;
+        font-size: 13px;
+        max-width: calc(100% - 40px);
+        backdrop-filter: blur(4px);
+
+        .hint-action {
+          flex-shrink: 0;
+          border: none;
+          padding: 4px 10px;
+          border-radius: 4px;
+          background: @primary-color;
+          color: #fff;
+          font-size: 12px;
+          cursor: pointer;
+
+          &:hover {
+            opacity: 0.9;
+          }
+        }
+      }
 
       .annotation-canvas {
         box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
@@ -2125,95 +2899,29 @@ onUnmounted(() => {
     box-shadow: -2px 0 10px rgba(0, 0, 0, 0.05);
     display: flex;
     flex-direction: column;
+    gap: 12px;
     z-index: 5;
     overflow-y: auto;
 
-    .panel-header {
-      padding-left: 5px;
-      font-size: 16px;
-      font-weight: 600;
-      margin-bottom: 16px;
-      color: @dark-color;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      flex-wrap: wrap;
-
-      i {
-        color: @primary-color;
-      }
-
-      .annotation-stats {
-        flex: 100%;
-        font-size: 14px;
-        font-weight: normal;
-        margin-top: 8px;
-        color: @gray-color;
-      }
-    }
-
-    .label-list {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      overflow-y: auto;
-      flex: 1;
-      max-height: 200px;
-
-      .label-item {
-        display: flex;
-        align-items: center;
-        padding: 12px;
-        border-radius: 8px;
-        cursor: pointer;
-        transition: all 0.2s;
-        border: 1px solid @border-color;
-
-        &:hover {
-          transform: translateY(-2px);
-          box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
-        }
-
-        &.active {
-          border-color: @primary-color;
-          background: fade(@primary-color, 5%);
-        }
-
-        .color-badge {
-          width: 24px;
-          height: 24px;
-          border-radius: 6px;
-          margin-right: 12px;
-        }
-
-        .label-name {
-          flex: 1;
-          font-weight: 500;
-        }
-
-        .label-shortcut {
-          background: #e9ecef;
-          padding: 2px 8px;
-          border-radius: 4px;
-          font-size: 12px;
-          font-weight: 600;
-          color: @gray-color;
-        }
-      }
-    }
-
     .object-layer-section {
-      margin-top: 20px;
+      margin-top: 8px;
       border-top: 1px solid #eee;
       padding-top: 15px;
 
       .panel-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
         margin-bottom: 10px;
         font-size: 14px;
+        font-weight: 600;
         color: #666;
 
-        i {
-          color: #666;
+        .object-count {
+          margin-left: auto;
+          font-size: 12px;
+          font-weight: 400;
+          color: @gray-color;
         }
       }
 
@@ -2231,7 +2939,11 @@ onUnmounted(() => {
           border-radius: 4px;
           margin-bottom: 5px;
           cursor: pointer;
-          transition: all 0.2s;
+          transition: background 0.15s;
+
+          &:last-child {
+            margin-bottom: 0;
+          }
 
           &:hover {
             background-color: #f5f7fa;
@@ -2247,12 +2959,17 @@ onUnmounted(() => {
             height: 16px;
             border-radius: 4px;
             margin-right: 10px;
+            flex-shrink: 0;
           }
 
           .object-name {
             flex: 1;
             font-size: 13px;
             color: #333;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
           }
 
           .object-actions {
@@ -2310,6 +3027,21 @@ onUnmounted(() => {
 @media (min-width: 1920px) {
   :fullscreen .label-panel {
     width: 220px;
+  }
+}
+
+.train-menu-overlay {
+  .train-menu-header {
+    padding: 8px 12px 6px;
+    font-size: 12px;
+    color: #8c8c8c;
+    line-height: 1.4;
+    border-bottom: 1px solid #f0f0f0;
+    margin-bottom: 4px;
+
+    strong {
+      color: #fa8c16;
+    }
   }
 }
 

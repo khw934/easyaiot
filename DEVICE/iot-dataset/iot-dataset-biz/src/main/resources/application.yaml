@@ -5,10 +5,10 @@ spring:
 
   # Servlet 配置
   servlet:
-    # 文件上传相关配置项
+    # 文件上传相关配置项（分片单块约 10MB，直传保留小文件通道）
     multipart:
-      max-file-size: 200MB # 单个文件大小
-      max-request-size: 200MB # 设置总上传的文件大小
+      max-file-size: 20MB
+      max-request-size: 25MB
   mvc:
     pathmatch:
       matching-strategy: ANT_PATH_MATCHER # 解决 SpringFox 与 SpringBoot 2.6.x 不兼容的问题，参见 SpringFoxHandlerProviderBeanPostProcessor 类
@@ -209,3 +209,10 @@ iot:
     end-code: 9999 # 这里配置 9999 的原因是，测试方便。
 
 debug: false
+
+--- #################### 数据集上传配置 ####################
+
+dataset:
+  upload:
+    chunk-dir: ${user.home}/dataset-chunk-upload
+    max-file-size: 214748364800 # 200GB

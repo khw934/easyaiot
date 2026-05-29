@@ -2,6 +2,7 @@ package com.basiclab.iot.dataset.service;
 
 import com.basiclab.iot.common.domain.PageResult;
 import com.basiclab.iot.dataset.dal.dataobject.DatasetImageDO;
+import com.basiclab.iot.dataset.domain.dataset.vo.DatasetImageImportItem;
 import com.basiclab.iot.dataset.domain.dataset.vo.DatasetImagePageReqVO;
 import com.basiclab.iot.dataset.domain.dataset.vo.DatasetImageSaveReqVO;
 import com.basiclab.iot.dataset.domain.dataset.vo.DatasetImageUploadRespVO;
@@ -10,6 +11,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import javax.validation.Valid;
 import java.math.BigDecimal;
+import java.nio.file.Path;
 import java.util.List;
 
 /**
@@ -92,6 +94,12 @@ public interface DatasetImageService {
      */
     DatasetImageUploadRespVO processUpload(MultipartFile file, Long datasetId, Boolean isZip);
 
+    /**
+     * 从本地合并后的文件处理上传（分片上传完成后调用）
+     */
+    DatasetImageUploadRespVO processUploadFromPath(Path filePath, String originalFilename,
+                                                   Long datasetId, Boolean isZip);
+
 
     /**
      * 上传文件
@@ -117,4 +125,26 @@ public interface DatasetImageService {
      * @param datasetId 数据集ID
      */
     String syncToMinio(Long datasetId);
+
+    /**
+     * 导入单张图片（可带标注 JSON，坐标为相对图片宽高的 0~1 归一化值）
+     */
+    Long saveImportedImage(Long datasetId, String filename, byte[] fileData,
+                           String annotationsJson, Integer width, Integer height, Integer completed);
+
+    /**
+     * 批量导入图片（同名覆盖，批量入库）
+     */
+    DatasetImageUploadRespVO batchImportImages(Long datasetId, List<DatasetImageImportItem> items);
+
+    /**
+     * 从 ZIP 文件流式分批导入（避免一次性加载全部图片到内存）
+     *
+     * @param progressCallback 已处理图片数量回调，可为 null
+     */
+    DatasetImageUploadRespVO importZipFromPath(Long datasetId, Path zipPath, java.util.function.IntConsumer progressCallback);
+
+    DatasetImageUploadRespVO importZipFromPath(Long datasetId, Path zipPath,
+                                               java.util.function.IntConsumer progressCallback,
+                                               ImportCancelChecker cancelChecker);
 }

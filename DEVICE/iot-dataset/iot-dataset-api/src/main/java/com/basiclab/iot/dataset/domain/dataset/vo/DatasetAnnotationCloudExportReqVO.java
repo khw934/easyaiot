@@ -5,15 +5,13 @@ import lombok.Data;
 
 import javax.validation.constraints.NotBlank;
 
-@Schema(description = "导出到云平台（新建数据集）请求")
+@Schema(description = "导出为新数据集")
 @Data
 public class DatasetAnnotationCloudExportReqVO {
 
-    @Schema(description = "新数据集名称")
-    @NotBlank(message = "请填写数据集名称")
+    @NotBlank(message = "数据集名称不能为空")
     private String name;
 
-    @Schema(description = "版本号")
-    @NotBlank(message = "请填写版本")
+    @NotBlank(message = "版本号不能为空")
     private String version;
 }

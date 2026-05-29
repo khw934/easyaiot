@@ -104,6 +104,74 @@ public class DatasetTagServiceImpl implements DatasetTagService {
         return tagMapper.selectPage(pageReqVO);
     }
 
+    private static final String[] TAG_COLOR_PALETTE = {
+            "#FF5252", "#4CAF50", "#FFC107", "#2196F3", "#9C27B0",
+            "#FF9800", "#00BCD4", "#E91E63", "#795548", "#607D8B"
+    };
+
+    @Override
+    public int ensureTagsForDataset(Long datasetId, List<String> classNames) {
+        if (datasetId == null || classNames == null || classNames.isEmpty()) {
+            return 0;
+        }
+        List<DatasetTagDO> existing = listTagsByDatasetId(datasetId);
+        java.util.Set<String> existingNames = existing.stream()
+                .map(t -> t.getName() != null ? t.getName().trim() : "")
+                .filter(s -> !s.isEmpty())
+                .collect(Collectors.toSet());
+        java.util.Set<Integer> usedShortcuts = existing.stream()
+                .map(DatasetTagDO::getShortcut)
+                .filter(s -> s != null)
+                .collect(Collectors.toSet());
+
+        int created = 0;
+        int colorIdx = existing.size();
+        for (String raw : classNames) {
+            if (raw == null) continue;
+            String name = raw.trim();
+            if (name.isEmpty() || existingNames.contains(name)) {
+                continue;
+            }
+            Integer shortcut = nextFreeShortcut(usedShortcuts);
+            if (shortcut == null) {
+                break;
+            }
+            DatasetTagSaveReqVO vo = new DatasetTagSaveReqVO();
+            vo.setDatasetId(datasetId);
+            vo.setName(name);
+            vo.setShortcut(shortcut);
+            vo.setColor(TAG_COLOR_PALETTE[colorIdx % TAG_COLOR_PALETTE.length]);
+            vo.setDescription("");
+            createDatasetTag(vo);
+            existingNames.add(name);
+            usedShortcuts.add(shortcut);
+            colorIdx++;
+            created++;
+        }
+        return created;
+    }
+
+    @Override
+    public List<DatasetTagDO> listTagsByDatasetId(Long datasetId) {
+        DatasetTagPageReqVO req = new DatasetTagPageReqVO();
+        req.setDatasetId(datasetId);
+        req.setPageNo(1);
+        req.setPageSize(100);
+        PageResult<DatasetTagDO> page = tagMapper.selectPage(req);
+        List<DatasetTagDO> list = page.getList() != null ? page.getList() : java.util.Collections.emptyList();
+        list.sort(java.util.Comparator.comparing(DatasetTagDO::getShortcut, java.util.Comparator.nullsLast(Integer::compareTo)));
+        return list;
+    }
+
+    private static Integer nextFreeShortcut(java.util.Set<Integer> used) {
+        for (int i = 1; i <= 9; i++) {
+            if (!used.contains(i)) {
+                return i;
+            }
+        }
+        return null;
+    }
+
     /**
      * 更新所有使用该标签的图片标注
      */

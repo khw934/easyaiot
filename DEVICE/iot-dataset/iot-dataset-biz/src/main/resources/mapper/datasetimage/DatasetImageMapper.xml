@@ -59,4 +59,9 @@
         SELECT * FROM dataset_image
         WHERE dataset_id = #{datasetId}
     </select>
+
+    <!-- 同步主键序列到 MAX(id)，修复初始化脚本中 setval 低于已有数据导致的 duplicate key -->
+    <select id="syncIdSequence" resultType="long">
+        SELECT setval('dataset_image_id_seq', COALESCE((SELECT MAX(id) FROM dataset_image), 0))
+    </select>
 </mapper>

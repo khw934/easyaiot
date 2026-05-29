@@ -25,6 +25,18 @@ public interface DatasetAnnotationService {
 
     DatasetAnnotationImportResultVO importCocoPath(Long datasetId, @Valid DatasetAnnotationCocoImportReqVO reqVO);
 
+    DatasetAnnotationImportResultVO importImageFolderPath(Long datasetId, String path,
+                                                          ImportCancelChecker cancelChecker,
+                                                          java.util.function.IntConsumer progressCallback);
+
+    DatasetAnnotationImportResultVO importYoloPath(Long datasetId, String path,
+                                                   ImportCancelChecker cancelChecker,
+                                                   java.util.function.IntConsumer progressCallback);
+
+    DatasetAnnotationImportResultVO importCocoPath(Long datasetId, @Valid DatasetAnnotationCocoImportReqVO reqVO,
+                                                   ImportCancelChecker cancelChecker,
+                                                   java.util.function.IntConsumer progressCallback);
+
     List<DatasetRespVO> listCloudDatasets();
 
     DatasetAnnotationImportResultVO cloudImport(Long targetDatasetId, @Valid DatasetAnnotationCloudImportReqVO reqVO);

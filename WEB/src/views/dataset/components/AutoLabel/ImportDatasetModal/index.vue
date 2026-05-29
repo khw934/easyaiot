@@ -2,7 +2,7 @@
   <BasicModal
     @register="register"
     width="800px"
-    @cancel="handleCancel"
+    :closeFunc="handleClose"
     :canFullscreen="false"
     :showOkBtn="false"
     :showCancelBtn="false"
@@ -24,7 +24,7 @@
 ├── photo2.png
 └── subdir__img3.jpg</pre>
             <Icon icon="ant-design:folder-open-outlined" class="upload-area-icon" />
-            <p>拖拽文件夹到此处或点击选择文件夹（支持子目录中的图片）</p>
+            <p>拖拽文件夹到此处或点击选择文件夹（将自动压缩为 ZIP 后整体上传，服务端解压并批量入库；同名图片自动覆盖，支持断点续传）</p>
             <input
               ref="folderInputRef"
               type="file"
@@ -35,10 +35,23 @@
               @change="onFolderSelect"
             />
             <Button type="primary" @click="triggerFolderSelect">选择文件夹</Button>
-            <div v-if="folderFileCount > 0" class="selected-hint">已选择 {{ folderFileCount }} 个文件</div>
+            <div v-if="folderFileCount > 0" class="selected-hint">
+              已选择 {{ folderFileCount }} 个文件
+              <span v-if="folderTotalSize">（合计 {{ formatFileSize(folderTotalSize) }}）</span>
+            </div>
+            <DatasetImportProgress
+              v-if="uploading && tabActive === 'image'"
+              class="upload-progress-wrap"
+              :percent="uploadPercent"
+              :detail="uploadCurrentFile >= 1 ? '正在上传压缩包（支持断点续传）' : '正在压缩图片（支持断点续传）'"
+              :loading="cancelling"
+              cancel-text="取消上传"
+              confirm-title="确定取消上传吗？已上传的分片将被删除。"
+              @cancel="cancelUpload"
+            />
           </div>
           <div class="upload-actions">
-            <Button type="primary" :loading="loading" :disabled="folderFileCount === 0" @click="uploadImages">
+            <Button type="primary" :loading="loading" :disabled="folderFileCount === 0 || uploading" @click="uploadImages">
               <Icon icon="ant-design:upload-outlined" />
               上传图片到数据集
             </Button>
@@ -59,12 +72,20 @@ uploads/
             <div v-if="selectedVideo" class="selected-hint">已选择: {{ selectedVideo.name }}</div>
             <div class="form-group inline-form">
               <label>抽帧间隔 (帧):</label>
-              <InputNumber v-model:value="frameInterval" :min="1" :max="1000" />
+              <InputNumber v-model:value="frameInterval" :min="1" :max="1000" :disabled="loading" />
               <small>每隔指定帧数保存一帧作为样本</small>
             </div>
+            <DatasetImportProgress
+              v-if="loading && tabActive === 'video'"
+              class="upload-progress-wrap"
+              :percent="importProgressPercent"
+              detail="正在上传视频并抽帧，请勿关闭页面…"
+              :loading="importCancelling"
+              @cancel="cancelImport"
+            />
           </div>
           <div class="upload-actions">
-            <Button type="primary" :loading="loading" :disabled="!selectedVideo" @click="extractFrames">
+            <Button type="primary" :loading="loading" :disabled="!selectedVideo || loading" @click="extractFrames">
               <Icon icon="ant-design:film-outlined" />
               抽帧并添加到数据集
             </Button>
@@ -86,9 +107,18 @@ uploads/
               <label>工程根目录（绝对路径）</label>
               <Input v-model:value="datasetPath" placeholder="/data/my_label_project" />
             </div>
+            <DatasetImportProgress
+              v-if="loading && tabActive === 'path'"
+              class="upload-progress-wrap"
+              :percent="importProgressPercent"
+              detail="正在导入 ImageFolder，请勿关闭页面…"
+              :loading="importCancelling"
+              cancel-text="取消导入"
+              @cancel="cancelImport"
+            />
           </div>
           <div class="upload-actions">
-            <Button type="primary" :loading="loading" @click="importImageFolderPath">
+            <Button type="primary" :loading="loading" :disabled="loading" @click="importImageFolderPath">
               <Icon icon="ant-design:folder-add-outlined" />
               导入 ImageFolder（LabelMe / COCO / YOLO 回退）
             </Button>
@@ -105,15 +135,25 @@ uploads/
 │   │   └── img001.jpg
 │   └── labels/
 │       └── img001.txt
-├── val/ ...
+├── valid/ ...
 └── test/ ...</pre>
             <div class="form-group">
-              <label>YOLO 数据集根目录（绝对路径）</label>
-              <Input v-model:value="yoloPath" placeholder="/data/yolo_dataset" />
+              <label>YOLO 数据集根目录（服务端绝对路径）</label>
+              <Input v-model:value="yoloPath" placeholder="/data/yolo_dataset" :disabled="loading" />
+              <small class="path-hint">路径需在 iot-dataset 服务所在机器上可访问；大批量导入可能需要数分钟，请耐心等待。</small>
             </div>
+            <DatasetImportProgress
+              v-if="loading && tabActive === 'yolo'"
+              class="upload-progress-wrap"
+              :percent="importProgressPercent"
+              detail="正在导入 YOLO 数据集，请勿关闭页面…"
+              :loading="importCancelling"
+              cancel-text="取消导入"
+              @cancel="cancelImport"
+            />
           </div>
           <div class="upload-actions">
-            <Button type="primary" :loading="loading" @click="importYoloPath">
+            <Button type="primary" :loading="loading" :disabled="loading" @click="importYoloPath">
               <Icon icon="ant-design:import-outlined" />
               导入 YOLO（仅 .txt）
             </Button>
@@ -130,15 +170,24 @@ uploads/
     └── 000000000002.jpg</pre>
             <div class="form-group">
               <label>instances JSON 绝对路径</label>
-              <Input v-model:value="cocoJsonPath" placeholder="/path/to/instances_default.json" />
+              <Input v-model:value="cocoJsonPath" placeholder="/path/to/instances_default.json" :disabled="loading" />
             </div>
             <div class="form-group">
               <label>图片根目录（可选）</label>
-              <Input v-model:value="cocoImagesRoot" placeholder="/path/to/images" />
+              <Input v-model:value="cocoImagesRoot" placeholder="/path/to/images" :disabled="loading" />
             </div>
+            <DatasetImportProgress
+              v-if="loading && tabActive === 'coco'"
+              class="upload-progress-wrap"
+              :percent="importProgressPercent"
+              detail="正在导入 COCO 数据集，请勿关闭页面…"
+              :loading="importCancelling"
+              cancel-text="取消导入"
+              @cancel="cancelImport"
+            />
           </div>
           <div class="upload-actions">
-            <Button type="primary" :loading="loading" @click="importCocoPath">
+            <Button type="primary" :loading="loading" :disabled="loading" @click="importCocoPath">
               <Icon icon="ant-design:database-outlined" />
               导入 COCO
             </Button>
@@ -155,14 +204,24 @@ uploads/
               <Select
                 v-model:value="cloudDatasetId"
                 :loading="cloudLoading"
+                :disabled="loading"
                 placeholder="请选择数据集"
                 style="width: 100%"
                 :options="cloudOptions"
               />
             </div>
+            <DatasetImportProgress
+              v-if="loading && tabActive === 'cloud'"
+              class="upload-progress-wrap"
+              :percent="importProgressPercent"
+              detail="正在从云平台下载并导入，请勿关闭页面…"
+              :loading="importCancelling"
+              cancel-text="取消导入"
+              @cancel="cancelImport"
+            />
           </div>
           <div class="upload-actions">
-            <Button type="primary" :loading="loading" @click="importFromCloud">
+            <Button type="primary" :loading="loading" :disabled="loading" @click="importFromCloud">
               <Icon icon="ant-design:cloud-download-outlined" />
               从云平台导入
             </Button>
@@ -174,13 +233,13 @@ uploads/
 </template>
 
 <script lang="ts" setup>
-import { ref, watch } from 'vue';
+import { ref, watch, computed } from 'vue';
 import { BasicModal, useModal } from '@/components/Modal';
 import { Icon } from '@/components/Icon';
 import { Tabs, TabPane, InputNumber, Button, Input, Select } from 'ant-design-vue';
 import { useMessage } from '@/hooks/web/useMessage';
+import DatasetImportProgress from '@/views/dataset/components/DatasetImportProgress.vue';
 import {
-  importAnnotationImageFolder,
   importAnnotationImageFolderPath,
   importAnnotationYoloPath,
   importAnnotationCocoPath,
@@ -189,7 +248,10 @@ import {
   extractAnnotationFrames,
   type DatasetAnnotationImportResult,
 } from '@/api/device/dataset';
-
+import {
+  formatFileSize,
+  resumableUploadDatasetFiles,
+} from '@/utils/upload/resumableUpload';
 defineOptions({ name: 'ImportDatasetModal' });
 
 const props = defineProps<{
@@ -198,9 +260,17 @@ const props = defineProps<{
 }>();
 
 const { createMessage } = useMessage();
-const emits = defineEmits(['success']);
+const emits = defineEmits<{
+  (e: 'success', payload?: DatasetAnnotationImportResult): void;
+}>();
 
 const loading = ref(false);
+const uploading = ref(false);
+const cancelling = ref(false);
+const uploadPercent = ref(0);
+const importProgressPercent = ref(0);
+const uploadCurrentFile = ref(0);
+const uploadTotalFiles = ref(0);
 const tabActive = ref('image');
 const folderFiles = ref<File[]>([]);
 const folderFileCount = ref(0);
@@ -216,10 +286,91 @@ const cloudLoading = ref(false);
 
 const folderInputRef = ref<HTMLInputElement | null>(null);
 const videoInputRef = ref<HTMLInputElement | null>(null);
+const uploadAbortController = ref<AbortController | null>(null);
+const importAbortController = ref<AbortController | null>(null);
+const importCancelling = ref(false);
+let importProgressTimer: ReturnType<typeof setInterval> | null = null;
+
+function isRequestAborted(error: unknown, signal?: AbortSignal): boolean {
+  if (signal?.aborted) {
+    return true;
+  }
+  const err = error as { code?: string; name?: string; message?: string };
+  return err?.code === 'ERR_CANCELED'
+    || err?.name === 'CanceledError'
+    || err?.message === 'canceled'
+    || err?.message === '上传已取消';
+}
+
+function startImportProgress() {
+  importProgressPercent.value = 0;
+  importProgressTimer = setInterval(() => {
+    if (importProgressPercent.value < 95) {
+      importProgressPercent.value = Math.min(95, importProgressPercent.value + 1);
+    }
+  }, 3000);
+}
+
+function stopImportProgress() {
+  if (importProgressTimer) {
+    clearInterval(importProgressTimer);
+    importProgressTimer = null;
+  }
+  importProgressPercent.value = 0;
+}
+
+function beginImportTask(): AbortSignal {
+  importAbortController.value = new AbortController();
+  startImportProgress();
+  return importAbortController.value.signal;
+}
+
+function finishImportTask() {
+  loading.value = false;
+  importAbortController.value = null;
+  importCancelling.value = false;
+  stopImportProgress();
+}
+
+async function runImportRequest<T>(
+  request: (signal: AbortSignal) => Promise<T>,
+  onSuccess: (data: T) => void,
+  errorMessage: string,
+) {
+  loading.value = true;
+  const signal = beginImportTask();
+  try {
+    const res = await request(signal);
+    const data = (res as { data?: T })?.data ?? res;
+    importProgressPercent.value = 100;
+    onSuccess(data as T);
+  } catch (e: any) {
+    if (!isRequestAborted(e, signal)) {
+      createMessage.error(e?.message || errorMessage);
+    }
+  } finally {
+    finishImportTask();
+  }
+}
+
+const folderTotalSize = computed(() =>
+  folderFiles.value.reduce((sum, f) => sum + f.size, 0),
+);
 
 const [register, { openModal, closeModal }] = useModal();
 
 function resetState() {
+  uploadAbortController.value?.abort();
+  uploadAbortController.value = null;
+  importAbortController.value?.abort();
+  importAbortController.value = null;
+  uploading.value = false;
+  cancelling.value = false;
+  importCancelling.value = false;
+  uploadPercent.value = 0;
+  uploadCurrentFile.value = 0;
+  uploadTotalFiles.value = 0;
+  stopImportProgress();
   folderFiles.value = [];
   folderFileCount.value = 0;
   selectedVideo.value = null;
@@ -236,6 +387,8 @@ function formatImportMsg(d: DatasetAnnotationImportResult): string {
   if (d.labelmeImages) parts.push(`LabelMe 标注 ${d.labelmeImages} 张`);
   if (d.cocoImages) parts.push(`COCO 标注 ${d.cocoImages} 张`);
   if (d.yoloImages) parts.push(`YOLO .txt 标注 ${d.yoloImages} 张`);
+  if (d.tagsCreated) parts.push(`标签 ${d.tagsCreated} 个`);
+  else if (d.classes?.length) parts.push(`类别 ${d.classes.length} 个`);
   let msg = parts.length ? parts.join('，') : '导入完成';
   if (d.hint) msg += `（${d.hint}）`;
   return msg;
@@ -270,11 +423,12 @@ const openModalWithReset = () => {
 defineExpose({ openModal: openModalWithReset, closeModal });
 
 function requireDatasetId(): number | null {
-  if (!props.datasetId) {
+  const id = props.datasetId;
+  if (id == null || Number.isNaN(id) || id <= 0) {
     createMessage.warning('请先选择数据集');
     return null;
   }
-  return props.datasetId;
+  return id;
 }
 
 function collectImageFiles(fileList: FileList | File[]) {
@@ -310,43 +464,93 @@ function onVideoDrop(e: DragEvent) {
   if (f?.type.startsWith('video/')) selectedVideo.value = f;
 }
 
+function cancelUpload() {
+  if (!uploading.value || cancelling.value) {
+    return;
+  }
+  cancelling.value = true;
+  uploadAbortController.value?.abort();
+  uploading.value = false;
+  loading.value = false;
+  uploadPercent.value = 0;
+  uploadCurrentFile.value = 0;
+  uploadTotalFiles.value = 0;
+  folderFiles.value = [];
+  folderFileCount.value = 0;
+  createMessage.info('已取消上传');
+}
+
+function cancelImport() {
+  if (!loading.value || importCancelling.value || !importAbortController.value) {
+    return;
+  }
+  importCancelling.value = true;
+  importAbortController.value.abort();
+  loading.value = false;
+  stopImportProgress();
+  importAbortController.value = null;
+  importCancelling.value = false;
+  createMessage.info('已取消');
+}
+
 async function uploadImages() {
   const dsId = requireDatasetId();
   if (!dsId || folderFiles.value.length === 0) return;
   loading.value = true;
+  uploading.value = true;
+  uploadPercent.value = 0;
+  uploadTotalFiles.value = folderFiles.value.length;
+  uploadAbortController.value = new AbortController();
   try {
-    const formData = new FormData();
-    folderFiles.value.forEach((f) => formData.append('files', f, f.webkitRelativePath || f.name));
-    const res = await importAnnotationImageFolder(dsId, formData);
-    const data = res?.data ?? res;
-    createMessage.success(formatImportMsg(data) || '上传成功');
+    const result = await resumableUploadDatasetFiles(
+      dsId,
+      folderFiles.value,
+      (percent, current, total) => {
+        uploadPercent.value = percent;
+        uploadCurrentFile.value = current;
+        uploadTotalFiles.value = total;
+      },
+      uploadAbortController.value.signal,
+    );
+    const msg =
+      result.failedCount > 0
+        ? `上传完成：成功 ${result.successCount} 张，失败 ${result.failedCount} 张`
+        : result.overwrittenCount
+          ? `成功导入 ${result.successCount} 张（覆盖 ${result.overwrittenCount} 张同名图片）`
+          : `成功上传 ${result.successCount} 张图片`;
+    createMessage.success(msg);
     closeModal();
-    emits('success');
+    emits('success', {
+      imagesCopied: result.successCount,
+      hint: result.failedCount > 0 ? result.failedFiles.join('; ') : undefined,
+    });
   } catch (e: any) {
-    createMessage.error(e?.message || '上传失败');
+    if (e?.message !== '上传已取消') {
+      createMessage.error(e?.message || '上传失败，可重新打开并选择同一文件夹继续上传');
+    }
   } finally {
     loading.value = false;
+    uploading.value = false;
+    cancelling.value = false;
+    uploadAbortController.value = null;
   }
 }
 
 async function extractFrames() {
   const dsId = requireDatasetId();
   if (!dsId || !selectedVideo.value) return;
-  loading.value = true;
-  try {
-    const formData = new FormData();
-    formData.append('file', selectedVideo.value);
-    formData.append('frame_interval', String(frameInterval.value));
-    const res = await extractAnnotationFrames(dsId, formData);
-    const data = res?.data ?? res;
-    createMessage.success(formatImportMsg(data) || `抽帧完成，共 ${data?.imagesCopied ?? 0} 帧`);
-    closeModal();
-    emits('success');
-  } catch (e: any) {
-    createMessage.error(e?.message || '抽帧失败');
-  } finally {
-    loading.value = false;
-  }
+  const formData = new FormData();
+  formData.append('file', selectedVideo.value);
+  formData.append('frame_interval', String(frameInterval.value));
+  await runImportRequest(
+    (signal) => extractAnnotationFrames(dsId, formData, signal),
+    (data) => {
+      createMessage.success(formatImportMsg(data) || `抽帧完成，共 ${data?.imagesCopied ?? 0} 帧`);
+      closeModal();
+      emits('success', data);
+    },
+    '抽帧失败',
+  );
 }
 
 async function importImageFolderPath() {
@@ -356,18 +560,15 @@ async function importImageFolderPath() {
     createMessage.warning('请填写数据集目录的绝对路径');
     return;
   }
-  loading.value = true;
-  try {
-    const res = await importAnnotationImageFolderPath(dsId, path);
-    const data = res?.data ?? res;
-    createMessage.success('ImageFolder 导入成功：' + formatImportMsg(data));
-    closeModal();
-    emits('success');
-  } catch (e: any) {
-    createMessage.error(e?.message || '导入失败');
-  } finally {
-    loading.value = false;
-  }
+  await runImportRequest(
+    (signal) => importAnnotationImageFolderPath(dsId, path, signal),
+    (data) => {
+      createMessage.success('ImageFolder 导入成功：' + formatImportMsg(data));
+      closeModal();
+      emits('success', data);
+    },
+    '导入失败',
+  );
 }
 
 async function importYoloPath() {
@@ -377,18 +578,15 @@ async function importYoloPath() {
     createMessage.warning('请填写 YOLO 数据集根目录的绝对路径');
     return;
   }
-  loading.value = true;
-  try {
-    const res = await importAnnotationYoloPath(dsId, path);
-    const data = res?.data ?? res;
-    createMessage.success('YOLO 导入成功：' + formatImportMsg(data));
-    closeModal();
-    emits('success');
-  } catch (e: any) {
-    createMessage.error(e?.message || '导入失败');
-  } finally {
-    loading.value = false;
-  }
+  await runImportRequest(
+    (signal) => importAnnotationYoloPath(dsId, path, signal),
+    (data) => {
+      createMessage.success('YOLO 导入成功：' + formatImportMsg(data));
+      closeModal();
+      emits('success', data);
+    },
+    '导入失败，请确认路径在服务端存在且 iot-dataset 服务已重启',
+  );
 }
 
 async function importCocoPath() {
@@ -398,21 +596,16 @@ async function importCocoPath() {
     createMessage.warning('请填写 COCO instances JSON 的绝对路径');
     return;
   }
-  loading.value = true;
-  try {
-    const res = await importAnnotationCocoPath(dsId, {
-      cocoJson,
-      imagesRoot: cocoImagesRoot.value.trim() || undefined,
-    });
-    const data = res?.data ?? res;
-    createMessage.success('COCO 导入成功：' + formatImportMsg(data));
-    closeModal();
-    emits('success');
-  } catch (e: any) {
-    createMessage.error(e?.message || '导入失败');
-  } finally {
-    loading.value = false;
-  }
+  const imagesRoot = cocoImagesRoot.value.trim() || undefined;
+  await runImportRequest(
+    (signal) => importAnnotationCocoPath(dsId, { cocoJson, imagesRoot }, signal),
+    (data) => {
+      createMessage.success('COCO 导入成功：' + formatImportMsg(data));
+      closeModal();
+      emits('success', data);
+    },
+    '导入失败',
+  );
 }
 
 async function importFromCloud() {
@@ -421,23 +614,21 @@ async function importFromCloud() {
     createMessage.warning('请选择云平台数据集');
     return;
   }
-  loading.value = true;
-  try {
-    const res = await importAnnotationFromCloud(dsId, cloudDatasetId.value);
-    const data = res?.data ?? res;
-    createMessage.success(formatImportMsg(data) || '云平台导入成功');
-    closeModal();
-    emits('success');
-  } catch (e: any) {
-    createMessage.error(e?.message || '导入失败');
-  } finally {
-    loading.value = false;
-  }
+  const sourceDatasetId = cloudDatasetId.value;
+  await runImportRequest(
+    (signal) => importAnnotationFromCloud(dsId, sourceDatasetId, signal),
+    (data) => {
+      createMessage.success(formatImportMsg(data) || '云平台导入成功');
+      closeModal();
+      emits('success', data);
+    },
+    '导入失败',
+  );
 }
 
-function handleCancel() {
-  closeModal();
+async function handleClose(): Promise<boolean> {
   resetState();
+  return true;
 }
 </script>
 
@@ -499,6 +690,11 @@ function handleCancel() {
   margin-top: 10px;
   font-size: 13px;
   color: #666;
+}
+
+.upload-progress-wrap {
+  margin-top: 16px;
+  text-align: left;
 }
 
 .form-group {
