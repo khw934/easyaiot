@@ -21,6 +21,7 @@
 #   --skip-pull         跳过拉取镜像
 #   --no-upgrade-docker 检测到过旧 Docker 时不自动升级
 #   --upgrade-docker    强制升级 Docker CE（需 root）
+#   --skip-upload       跳过自动上传 MinIO 数据
 #
 # 默认连接信息（与 docker-compose.yml 一致）：
 #   API:     http://127.0.0.1:9000
@@ -60,6 +61,7 @@ SKIP_MIRROR=false
 SKIP_PULL=false
 SKIP_DOCKER_UPGRADE=false
 FORCE_DOCKER_UPGRADE=false
+SKIP_UPLOAD=false
 MIN_DOCKER_MAJOR=20
 ACTION="start"
 
@@ -94,11 +96,12 @@ CentOS 7.9 单独部署 MinIO 容器
   --skip-pull         跳过拉取镜像
   --no-upgrade-docker 不自动升级过旧 Docker
   --upgrade-docker    强制升级 Docker CE（需 root）
+  --skip-upload       跳过自动上传 MinIO 数据
 
 示例:
-  sudo ./start_minio_centos7.sh
+  sudo ./start_minio_centos7.sh        # 启动后自动上传 ../minio 数据（CentOS7 用 mc）
   ./start_minio_centos7.sh --status
-  ./upload_minio_data.sh               # 启动后初始化存储桶（可选）
+  ./upload_minio_data.sh --prefer-mc --non-interactive
 EOF
 }
 
@@ -115,6 +118,7 @@ parse_args() {
             --skip-pull) SKIP_PULL=true; shift ;;
             --no-upgrade-docker) SKIP_DOCKER_UPGRADE=true; shift ;;
             --upgrade-docker) FORCE_DOCKER_UPGRADE=true; shift ;;
+            --skip-upload) SKIP_UPLOAD=true; shift ;;
             *)
                 print_error "未知选项: $1"
                 show_help
@@ -538,7 +542,33 @@ show_connection_info() {
     echo "  docker ps | grep ${CONTAINER_NAME}"
     echo "  docker logs -f ${CONTAINER_NAME}"
     echo "  curl http://127.0.0.1:${MINIO_API_PORT}/minio/health/live"
-    echo "  ./upload_minio_data.sh    # 可选：初始化存储桶并上传数据"
+    echo "  ./upload_minio_data.sh --prefer-mc --non-interactive"
+}
+
+upload_minio_data_auto() {
+    if [ "$SKIP_UPLOAD" = true ]; then
+        print_info "已跳过 MinIO 数据上传 (--skip-upload)"
+        return 0
+    fi
+
+    local upload_script="${SCRIPT_DIR}/upload_minio_data.sh"
+    if [ ! -f "$upload_script" ]; then
+        print_warning "未找到 upload_minio_data.sh，跳过数据上传"
+        return 0
+    fi
+
+    print_section "自动上传 MinIO 数据"
+    chmod +x "$upload_script" 2>/dev/null || true
+    set +e
+    "$upload_script" --prefer-mc --non-interactive
+    local rc=$?
+    set -e
+    if [ "$rc" -eq 0 ]; then
+        print_success "MinIO 数据上传完成"
+        return 0
+    fi
+    print_warning "MinIO 数据上传未完全成功 (exit ${rc})，可手动: ./upload_minio_data.sh --prefer-mc"
+    return 0
 }
 
 stop_minio() {
@@ -603,6 +633,7 @@ main() {
 
     start_minio
     wait_for_minio || true
+    upload_minio_data_auto
     show_connection_info
     print_success "MinIO 独立部署流程完成"
 }

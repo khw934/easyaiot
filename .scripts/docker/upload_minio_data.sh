@@ -10,6 +10,12 @@
 #   1. 等待 MinIO 服务就绪
 #   2. 创建必要的存储桶
 #   3. 上传本地数据到 MinIO
+#
+# 选项：
+#   --non-interactive  跳过控制台登录确认提示（供自动化脚本调用）
+#   --prefer-mc        优先使用 Docker 版 mc 上传（CentOS7 推荐）
+#   --force-mc         强制使用 mc，不使用 Python SDK
+#   --force-python     强制使用 Python SDK
 # ============================================
 
 set -e
@@ -29,6 +35,21 @@ cd "$SCRIPT_DIR"
 LOG_DIR="${SCRIPT_DIR}/logs"
 mkdir -p "$LOG_DIR"
 LOG_FILE="${LOG_DIR}/upload_minio_data_$(date +%Y%m%d_%H%M%S).log"
+
+NON_INTERACTIVE=false
+PREFER_MC=false
+FORCE_MC=false
+FORCE_PYTHON=false
+
+MINIO_ENDPOINT="127.0.0.1:9000"
+MINIO_ACCESS_KEY="minioadmin"
+MINIO_SECRET_KEY="basiclab@iot975248395"
+MC_IMAGE="minio/mc:latest"
+
+BUCKET_LIST=(
+    "dataset" "datasets" "export-bucket" "inference-inputs"
+    "inference-results" "models" "snap-space" "alert-images"
+)
 
 # 初始化日志文件
 echo "=========================================" >> "$LOG_FILE"
@@ -83,6 +104,187 @@ print_section() {
     log_to_file "  $section"
     log_to_file "========================================="
     log_to_file ""
+}
+
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --non-interactive) NON_INTERACTIVE=true; shift ;;
+            --prefer-mc) PREFER_MC=true; shift ;;
+            --force-mc) FORCE_MC=true; PREFER_MC=true; shift ;;
+            --force-python) FORCE_PYTHON=true; shift ;;
+            -h|--help)
+                sed -n '1,20p' "$0"
+                exit 0
+                ;;
+            *) shift ;;
+        esac
+    done
+}
+
+is_centos7() {
+    if [ -f /etc/redhat-release ] && grep -qi "centos.*7" /etc/redhat-release 2>/dev/null; then
+        return 0
+    fi
+    if [ -f /etc/os-release ]; then
+        # shellcheck source=/dev/null
+        source /etc/os-release
+        [ "${ID:-}" = "centos" ] && [ "${VERSION_ID%%.*}" = "7" ]
+        return $?
+    fi
+    return 1
+}
+
+is_python36_or_older() {
+    local ver
+    ver=$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || echo "0")
+    local major minor
+    major=$(echo "$ver" | cut -d. -f1)
+    minor=$(echo "$ver" | cut -d. -f2)
+    [ "${major:-0}" -lt 3 ] 2>/dev/null && return 0
+    [ "${major:-0}" -eq 3 ] && [ "${minor:-0}" -le 6 ] 2>/dev/null
+}
+
+should_use_mc_upload() {
+    [ "$FORCE_PYTHON" = true ] && return 1
+    [ "$FORCE_MC" = true ] || [ "$PREFER_MC" = true ] && return 0
+    is_centos7 || is_python36_or_older
+}
+
+# CentOS7: minio>=7.2 依赖 argon2-cffi 需编译，易缺 libffi/Python.h
+install_minio_python_deps_centos7() {
+    print_section "CentOS7 安装 MinIO Python SDK 依赖"
+
+    if [ "$EUID" -eq 0 ]; then
+        yum install -y gcc python3-devel libffi-devel openssl-devel 2>/dev/null || \
+            yum install -y gcc python36-devel libffi-devel openssl-devel || {
+            print_error "无法安装 gcc/python3-devel/libffi-devel"
+            return 1
+        }
+    elif command -v sudo >/dev/null 2>&1; then
+        sudo yum install -y gcc python3-devel libffi-devel openssl-devel 2>/dev/null || \
+            sudo yum install -y gcc python36-devel libffi-devel openssl-devel || return 1
+    else
+        print_warning "需要 root 安装编译依赖，将尝试 mc 方式上传"
+        return 1
+    fi
+
+    print_info "安装 minio==7.1.17（避免 argon2-cffi 编译）..."
+    set +e
+    pip3 install -i https://mirrors.huaweicloud.com/repository/pypi/simple \
+        --trusted-host mirrors.huaweicloud.com \
+        'minio==7.1.17' 'urllib3<2' 'certifi<2025' 2>&1 | tee -a "$LOG_FILE"
+    local pip_rc=${PIPESTATUS[0]}
+    if [ "$pip_rc" -ne 0 ]; then
+        pip3 install 'minio==7.1.17' 'urllib3<2' 2>&1 | tee -a "$LOG_FILE"
+        pip_rc=${PIPESTATUS[0]}
+    fi
+    set -e
+
+    if [ "$pip_rc" -eq 0 ] && python3 -c "import minio" 2>/dev/null; then
+        print_success "MinIO Python SDK 安装成功"
+        return 0
+    fi
+    return 1
+}
+
+ensure_minio_python_sdk() {
+    if python3 -c "import minio" 2>/dev/null; then
+        return 0
+    fi
+
+    if is_centos7 || is_python36_or_older; then
+        install_minio_python_deps_centos7 && return 0
+    fi
+
+    print_info "正在安装 minio Python 库..."
+    python3 -m pip config set global.break-system-packages true >/dev/null 2>&1 || true
+    set +e
+    pip3 install minio >/dev/null 2>&1
+    local rc=$?
+    set -e
+    [ "$rc" -eq 0 ] && python3 -c "import minio" 2>/dev/null
+}
+
+ensure_mc_image() {
+    if docker image inspect "$MC_IMAGE" >/dev/null 2>&1; then
+        return 0
+    fi
+    print_info "拉取 mc 客户端镜像 ${MC_IMAGE} ..."
+    set +e
+    for img in "docker.1ms.run/minio/mc:latest" "docker.m.daocloud.io/minio/mc:latest" "$MC_IMAGE"; do
+        if DOCKER_CONTENT_TRUST=0 docker pull "$img"; then
+            [ "$img" != "$MC_IMAGE" ] && docker tag "$img" "$MC_IMAGE" 2>/dev/null || true
+            set -e
+            print_success "mc 镜像就绪: ${MC_IMAGE}"
+            return 0
+        fi
+    done
+    set -e
+    print_error "无法拉取 minio/mc 镜像"
+    return 1
+}
+
+# 在容器内执行 mc（minio/mc 镜像无 shell，需挂载配置目录复用 alias）
+mc_docker_run() {
+    local mc_config_dir="$1"
+    shift
+    docker run --rm --network host \
+        -v "${mc_config_dir}:/root/.mc" \
+        "$MC_IMAGE" "$@"
+}
+
+# 使用 Docker 版 mc 创建桶、设置公开策略并上传（CentOS7 无需 pip install minio）
+init_minio_with_mc() {
+    local minio_base_dir="${SCRIPT_DIR}/../minio"
+    ensure_mc_image || return 1
+
+    print_info "使用 Docker mc 客户端上传（--network host，无需 pip install minio）"
+
+    local mc_config_dir
+    mc_config_dir=$(mktemp -d /tmp/easyaiot-mc-config.XXXXXX 2>/dev/null || echo "/tmp/easyaiot-mc-config.$$")
+    mkdir -p "$mc_config_dir"
+
+    local mc_rc=0
+    set +e
+    mc_docker_run "$mc_config_dir" alias set easyaiot \
+        "http://${MINIO_ENDPOINT}" "${MINIO_ACCESS_KEY}" "${MINIO_SECRET_KEY}" || mc_rc=1
+
+    local bucket
+    for bucket in "${BUCKET_LIST[@]}"; do
+        mc_docker_run "$mc_config_dir" mb --ignore-existing "easyaiot/${bucket}" || mc_rc=1
+        mc_docker_run "$mc_config_dir" anonymous set public "easyaiot/${bucket}" >/dev/null 2>&1 || true
+        print_info "存储桶已就绪: ${bucket}"
+    done
+
+    local arg bucket_name dir_path object_prefix rel dest
+    for arg in "$@"; do
+        [ -z "$arg" ] && continue
+        IFS=':' read -r bucket_name dir_path object_prefix <<< "$arg"
+        [ -d "$dir_path" ] || continue
+        rel="${dir_path#${minio_base_dir}/}"
+        rel="${rel#/}"
+        if [ -n "$object_prefix" ]; then
+            dest="easyaiot/${bucket_name}/${object_prefix}"
+        else
+            dest="easyaiot/${bucket_name}"
+        fi
+        print_info "mc mirror: /data/${rel} -> ${dest}"
+        docker run --rm --network host \
+            -v "${mc_config_dir}:/root/.mc" \
+            -v "${minio_base_dir}:/data:ro" \
+            "$MC_IMAGE" mirror --overwrite "/data/${rel}" "${dest}" || mc_rc=1
+    done
+    set -e
+
+    rm -rf "$mc_config_dir"
+
+    if [ "$mc_rc" -eq 0 ]; then
+        print_success "mc 上传完成"
+        return 0
+    fi
+    print_error "mc 上传部分失败"
+    return 1
 }
 
 # 等待 MinIO 服务就绪
@@ -293,18 +495,10 @@ init_minio_with_python() {
         return 1
     fi
     
-    # 检查 minio 库是否安装
-    if ! python3 -c "import minio" 2>/dev/null; then
-        print_info "正在配置 pip 以允许安装系统包..."
-        # 配置 pip 允许安装系统包，避免某些系统上的权限错误
-        python3 -m pip config set global.break-system-packages true > /dev/null 2>&1 || true
-        
-        print_info "正在安装 minio Python 库..."
-        pip3 install minio > /dev/null 2>&1 || {
-            print_error "无法安装 minio Python 库，请手动安装: pip3 install minio"
-            rm -f "$python_script" "$output_file"
-            return 1
-        }
+    if ! ensure_minio_python_sdk; then
+        print_error "无法安装 MinIO Python SDK"
+        rm -f "$python_script" "$output_file"
+        return 1
     fi
     
     # 执行 Python 脚本，传递所有参数（只给所有者添加执行权限，避免需要 root 权限）
@@ -460,22 +654,40 @@ init_minio() {
         fi
     done
     
-    # 使用 Python 脚本初始化 MinIO
     local init_result=0
+    local upload_method="python"
+    if should_use_mc_upload; then
+        upload_method="mc"
+        print_info "上传方式: Docker mc（CentOS7 / 旧 Python 推荐）"
+    fi
+
+    run_upload() {
+        if [ "$upload_method" = "mc" ]; then
+            init_minio_with_mc "$@"
+        else
+            init_minio_with_python "$@"
+        fi
+    }
+
     if [ ${#upload_args[@]} -gt 0 ]; then
-        if init_minio_with_python "${upload_args[@]}"; then
+        if run_upload "${upload_args[@]}"; then
             print_success "MinIO 初始化完成！"
             init_result=0
+        elif [ "$upload_method" = "python" ]; then
+            print_warning "Python 上传失败，改用 Docker mc ..."
+            upload_method="mc"
+            run_upload "${upload_args[@]}" && init_result=0 || init_result=1
         else
-            print_warning "MinIO 初始化可能存在问题"
             init_result=1
         fi
     else
-        print_warning "没有可用的数据集目录，跳过文件上传"
-        # 仍然需要创建 bucket
-        if init_minio_with_python; then
+        print_warning "没有可用的数据集目录，仅创建存储桶"
+        if run_upload; then
             print_success "MinIO 存储桶创建完成！"
             init_result=0
+        elif [ "$upload_method" = "python" ]; then
+            upload_method="mc"
+            run_upload && init_result=0 || init_result=1
         else
             init_result=1
         fi
@@ -494,7 +706,10 @@ init_minio() {
         print_info "登录后，系统会自动完成必要的初始化配置，图像数据才能正常显示"
         echo ""
         
-        while true; do
+        if [ "$NON_INTERACTIVE" = true ]; then
+            print_info "非交互模式：请稍后访问 http://localhost:9001 登录一次控制台（图像显示需要）"
+        fi
+        while [ "$NON_INTERACTIVE" != true ]; do
             echo -ne "${YELLOW}[提示]${NC} 是否已经登录过 MinIO 管理平台？(y/N): "
             read -r response
             case "$response" in
@@ -519,9 +734,9 @@ init_minio() {
 
 # 主函数
 main() {
+    parse_args "$@"
     print_section "开始 MinIO 数据上传"
-    
-    # 执行初始化
+
     if init_minio; then
         print_success "MinIO 数据上传完成！"
         echo ""
