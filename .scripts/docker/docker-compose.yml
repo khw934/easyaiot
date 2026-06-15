@@ -336,12 +336,12 @@ services:
       # 宿主机根目录 /data 映射为容器内录像与日志目录（安装脚本会在启动前创建 /data）
       - "/data:/data:rw"
       - "./srs-entrypoint.sh:/usr/local/bin/srs-entrypoint.sh:ro"
+      - "./srs-healthcheck.sh:/usr/local/bin/srs-healthcheck.sh:ro"
     entrypoint: ["/bin/bash", "/usr/local/bin/srs-entrypoint.sh"]
     command: ["./objs/srs", "-c", "conf/docker.conf"]
     working_dir: /usr/local/srs
     healthcheck:
-      test:
-        ["CMD-SHELL", "curl -f http://localhost:1985/api/v1/versions || exit 1"]
+      test: ["CMD", "/bin/bash", "/usr/local/bin/srs-healthcheck.sh"]
       interval: 30s
       timeout: 10s
       retries: 5
