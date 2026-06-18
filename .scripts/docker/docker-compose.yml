@@ -370,18 +370,20 @@ services:
       - easyaiot-network
 
   # OpenVSCode Server（算法任务 AI 后处理脚本在线编辑）
+  # 使用 linuxserver 镜像：国内镜像源对 gitpod/openvscode-server 常返回 403
   VSCode:
-    image: gitpod/openvscode-server:openvscode-server-1.95.3
+    image: linuxserver/openvscode-server:1.95.3
     container_name: openvscode-server
     restart: always
     ports:
       - "0.0.0.0:10192:3000"
     environment:
       - TZ=Asia/Shanghai
-    user: "1000:1000"
+      - PUID=1000
+      - PGID=1000
     volumes:
-      - "./vscode_data/workspaces:/home/workspace:rw"
-    command: --host 0.0.0.0 --port 3000 --without-connection-token
+      - "./vscode_data/config:/config:rw"
+      - "./vscode_data/workspaces:/config/workspace:rw"
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:3000/ || exit 1"]
       interval: 30s

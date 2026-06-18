@@ -350,7 +350,7 @@ def create_app():
 
     # 注册蓝图（延迟导入，避免在环境变量加载前就导入）
     try:
-        from app.blueprints import export, inference, model, train, train_task, llm, ocr, speech, deploy, auto_label, plate, sam, minio_proxy
+        from app.blueprints import export, inference, model, train, train_task, llm, llm_deploy, ocr, speech, deploy, auto_label, plate, sam, minio_proxy
         
         app.register_blueprint(minio_proxy.minio_proxy_bp)
         app.register_blueprint(export.export_bp, url_prefix='/model/export')
@@ -359,6 +359,7 @@ def create_app():
         app.register_blueprint(train.train_bp, url_prefix='/model/train_task')
         app.register_blueprint(train_task.train_task_bp, url_prefix='/model/train_task')
         app.register_blueprint(llm.llm_bp, url_prefix='/model/llm')
+        app.register_blueprint(llm_deploy.llm_deploy_bp, url_prefix='/model/llm_deploy')
         app.register_blueprint(ocr.ocr_bp, url_prefix='/model/ocr')
         app.register_blueprint(speech.speech_bp, url_prefix='/model/speech')
         app.register_blueprint(deploy.deploy_service_bp, url_prefix='/model/deploy_service')

@@ -72,6 +72,11 @@ MIDDLEWARE_SERVICES=(
     "ZLMediaKit"
 )
 
+# 可选中间件：镜像拉取失败时不阻塞其余核心服务启动
+OPTIONAL_MIDDLEWARE_SERVICES=(
+    "VSCode"
+)
+
 # 中间件端口映射
 declare -A MIDDLEWARE_PORTS
 MIDDLEWARE_PORTS["Nacos"]="8848"
@@ -1790,12 +1795,13 @@ create_nodered_directories() {
 
 # 创建并设置 VSCode（OpenVSCode Server）工作区目录权限
 create_vscode_directories() {
+    local vscode_config_dir="${SCRIPT_DIR}/vscode_data/config"
     local vscode_workspace_dir="${SCRIPT_DIR}/vscode_data/workspaces"
     print_info "创建 VSCode 后处理工作区目录并设置权限..."
-    if set_data_dir_perms "1000:1000" "$vscode_workspace_dir"; then
+    if set_data_dir_perms "1000:1000" "$vscode_config_dir" "$vscode_workspace_dir"; then
         print_success "VSCode 工作区目录权限已设置 (UID 1000:1000, 777)"
     else
-        print_warning "无法设置 VSCode 目录权限，请手动执行: sudo chmod -R 777 $vscode_workspace_dir"
+        print_warning "无法设置 VSCode 目录权限，请手动执行: sudo chmod -R 777 $vscode_config_dir $vscode_workspace_dir"
     fi
 }
 
@@ -1977,6 +1983,7 @@ create_all_storage_directories() {
         "${SCRIPT_DIR}/srs_data/data:::"              # SRS 数据（使用默认权限）
         "${SCRIPT_DIR}/srs_data/playbacks:::"          # SRS 回放（使用默认权限）
         "${SCRIPT_DIR}/nodered_data/data:1000:1000:777" # NodeRED 数据
+        "${SCRIPT_DIR}/vscode_data/config:1000:1000:777"    # VSCode 配置
         "${SCRIPT_DIR}/vscode_data/workspaces:1000:1000:777" # VSCode 后处理工作区
         "${SCRIPT_DIR}/../zlmediakit/www:::"         # ZLMediaKit Web 目录（使用默认权限）
         "${SCRIPT_DIR}/../zlmediakit/log:::"         # ZLMediaKit 日志（使用默认权限）
@@ -4187,6 +4194,67 @@ init_databases() {
     fi
 }
 
+# 从 docker-compose 配置中提取指定服务的镜像名
+_get_service_image_from_compose() {
+    local service_name="$1"
+    $COMPOSE_CMD -f "$COMPOSE_FILE" config 2>/dev/null | awk -v svc="$service_name" '
+        $0 ~ "^  " svc ":" { found=1 }
+        found && /^\s+image:/ {
+            gsub(/^\s+image:\s*/, "")
+            gsub(/["'\'']/, "")
+            print
+            exit
+        }
+    '
+}
+
+# 启动中间件容器；可选服务镜像缺失时自动跳过，避免阻塞核心中间件
+compose_up_middleware() {
+    local -a skip_services=("$@")
+    local -a up_services=()
+    local svc should_skip
+
+    while IFS= read -r svc; do
+        [ -z "$svc" ] && continue
+        should_skip=0
+        for skip in "${skip_services[@]}"; do
+            if [ "$svc" = "$skip" ]; then
+                should_skip=1
+                break
+            fi
+        done
+        if [ "$should_skip" -eq 0 ]; then
+            up_services+=("$svc")
+        fi
+    done < <($COMPOSE_CMD -f "$COMPOSE_FILE" config --services 2>/dev/null)
+
+    if [ ${#up_services[@]} -eq 0 ]; then
+        print_error "没有可启动的中间件服务"
+        return 1
+    fi
+
+    if [ ${#skip_services[@]} -gt 0 ]; then
+        print_warning "以下可选服务已跳过: ${skip_services[*]}"
+    fi
+    print_info "启动服务: ${up_services[*]}"
+    $COMPOSE_CMD -f "$COMPOSE_FILE" up -d "${up_services[@]}" 2>&1 | tee -a "$LOG_FILE"
+    return "${PIPESTATUS[0]}"
+}
+
+# 收集镜像不可用的可选服务列表
+collect_skippable_optional_services() {
+    local -a skip_services=()
+    local svc img
+    for svc in "${OPTIONAL_MIDDLEWARE_SERVICES[@]}"; do
+        img="$(_get_service_image_from_compose "$svc")"
+        if [ -n "$img" ] && ! docker image inspect "$img" &>/dev/null; then
+            print_warning "可选服务 $svc 镜像不可用 ($img)，将跳过启动"
+            skip_services+=("$svc")
+        fi
+    done
+    echo "${skip_services[@]}"
+}
+
 # 检查并拉取缺失的镜像
 check_and_pull_images() {
     print_info "检查所需镜像是否存在..."
@@ -4241,7 +4309,20 @@ check_and_pull_images() {
         local _pull_img _pull_fail=0
         for _pull_img in "${missing_list[@]}"; do
             docker pull "$_pull_img" 2>&1 | tee -a "$LOG_FILE"
-            [ "${PIPESTATUS[0]}" -ne 0 ] && _pull_fail=1
+            if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+                _pull_fail=1
+                # VSCode：DaoCloud 对 gitpod 镜像常 403，回退到 linuxserver 官方仓库
+                if [[ "$_pull_img" == linuxserver/openvscode-server:* ]]; then
+                    local _tag="${_pull_img#*:}"
+                    local _alt="lscr.io/linuxserver/openvscode-server:${_tag}"
+                    print_info "尝试备用镜像源: $_alt"
+                    if docker pull "$_alt" 2>&1 | tee -a "$LOG_FILE"; then
+                        docker tag "$_alt" "$_pull_img" 2>/dev/null || true
+                        _pull_fail=0
+                        print_success "已通过备用源拉取并标记: $_pull_img"
+                    fi
+                fi
+            fi
         done
         if [ "$_pull_fail" -eq 0 ]; then
             print_success "缺失镜像拉取完成"
@@ -5200,8 +5281,10 @@ install_middleware() {
     print_section "启动 Milvus 等中间件容器"
     print_info "启动所有中间件服务..."
     # 取 PIPESTATUS[0] 判定（tee 恒 0，`if 管道` 永远走成功分支，失败会被掩盖）
-    $COMPOSE_CMD -f "$COMPOSE_FILE" up -d 2>&1 | tee -a "$LOG_FILE"
-    _up_rc=${PIPESTATUS[0]}
+    local -a _skip_optional=()
+    read -r -a _skip_optional <<< "$(collect_skippable_optional_services)"
+    compose_up_middleware "${_skip_optional[@]}"
+    _up_rc=$?
     if [ "${_up_rc}" -eq 0 ]; then
         print_success "容器启动命令执行完成"
     else
@@ -5346,7 +5429,9 @@ start_middleware() {
     check_and_clean_ports
     
     print_info "启动所有中间件服务..."
-    $COMPOSE_CMD -f "$COMPOSE_FILE" up -d 2>&1 | tee -a "$LOG_FILE"
+    local -a _skip_optional=()
+    read -r -a _skip_optional <<< "$(collect_skippable_optional_services)"
+    compose_up_middleware "${_skip_optional[@]}"
     _up_rc=${PIPESTATUS[0]}
     ensure_nacos_admin_user
     
@@ -5756,8 +5841,10 @@ update_middleware() {
     cleanup_renamed_containers
     fix_nacos_derby_corruption
     print_info "重启所有中间件服务..."
-    $COMPOSE_CMD -f "$COMPOSE_FILE" up -d 2>&1 | tee -a "$LOG_FILE"
-    _up_rc=${PIPESTATUS[0]}   # 必须紧跟管道取退出码：tee 恒 0，直接判管道会把失败误报成成功
+    local -a _skip_optional=()
+    read -r -a _skip_optional <<< "$(collect_skippable_optional_services)"
+    compose_up_middleware "${_skip_optional[@]}"
+    _up_rc=$?
     ensure_nacos_admin_user
 
     if [ "${_up_rc}" -eq 0 ]; then

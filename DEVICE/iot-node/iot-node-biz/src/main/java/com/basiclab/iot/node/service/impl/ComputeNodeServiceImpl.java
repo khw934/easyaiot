@@ -907,6 +907,10 @@ public class ComputeNodeServiceImpl implements ComputeNodeService {
             caps.put("algorithm_patrol", true);
             caps.put("stream_forward", true);
         }
+        if (NodeRoleEnum.GPU.getRole().equals(nodeRole)
+                || NodeRoleEnum.HYBRID.getRole().equals(nodeRole)) {
+            caps.put("llm_inference", true);
+        }
         if (NodeRoleEnum.MEDIA.getRole().equals(nodeRole) || NodeRoleEnum.HYBRID.getRole().equals(nodeRole)) {
             caps.put("srs_live", true);
             caps.put("srs_ai", true);
