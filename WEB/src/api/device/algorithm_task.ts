@@ -181,6 +181,10 @@ export const createAlgorithmTask = (data: {
   is_enabled?: boolean;
   defense_mode?: string;
   defense_schedule?: string;
+  /** 是否启用 AI 后处理脚本，默认关闭 */
+  post_process_enabled?: boolean;
+  /** 后处理 Worker 副本数 */
+  post_process_replicas?: number;
 }) => {
   return commonApi<{ code: number; msg: string; data: AlgorithmTask }>(
     'post',
@@ -662,7 +666,7 @@ export const initPostProcessWorkspace = (task_id: number) => {
 };
 
 export const getPostProcessIdeUrl = (task_id: number) => {
-  return commonApi<{ code: number; msg: string; data: PostProcessIdeUrl }>(
+  return commonApi<PostProcessIdeUrl>(
     'get',
     `${ALGORITHM_PREFIX}/task/${task_id}/post-process/ide-url`,
     { errorMessageMode: 'none' },

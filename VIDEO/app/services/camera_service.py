@@ -26,6 +26,7 @@ from app.services.nvr_service import (
 )
 from app.services.onvif_service import OnvifCamera
 from app.utils.gb28181_source import GB28181_SOURCE_PREFIX
+from app.utils.rtsp_url import parse_rtsp_auth
 from app.utils.ip_utils import IpReachabilityMonitor, resolve_ipv4_for_stream_urls
 from models import Device, db, DeviceDetectionRegion, DeviceDirectory, DeviceTrackSession, DeviceTrackPoint
 
@@ -339,18 +340,29 @@ def find_existing_device_for_register(
         if existing:
             return existing
 
+    nvr_scope = bool(nvr_id)
+
     if mac:
-        existing = Device.query.filter(Device.mac == mac).first()
+        q = Device.query.filter(Device.mac == mac)
+        if nvr_scope:
+            q = q.filter(or_(Device.nvr_id.is_(None), Device.nvr_id == nvr_id))
+        existing = q.first()
         if existing:
             return existing
 
     if serial:
-        existing = Device.query.filter(Device.serial_number == serial).first()
+        q = Device.query.filter(Device.serial_number == serial)
+        if nvr_scope:
+            q = q.filter(or_(Device.nvr_id.is_(None), Device.nvr_id == nvr_id))
+        existing = q.first()
         if existing:
             return existing
 
     if normalized_source:
-        existing = Device.query.filter(Device.source == normalized_source).first()
+        q = Device.query.filter(Device.source == normalized_source)
+        if nvr_scope:
+            q = q.filter(or_(Device.nvr_id.is_(None), Device.nvr_id == nvr_id))
+        existing = q.first()
         if existing:
             return existing
         # 已提供完整取流地址时，同一 IP 不同路径视为不同设备，不再按 IP 兜底
@@ -361,11 +373,12 @@ def find_existing_device_for_register(
             Device.ip == ip,
             or_(Device.nvr_id.is_(None), Device.nvr_channel == 0),
         ).first()
-        if existing:
+        if existing and (not nvr_scope or existing.nvr_id in (None, nvr_id)):
             return existing
-        existing = Device.query.filter_by(ip=ip).first()
-        if existing:
-            return existing
+        if not nvr_scope:
+            existing = Device.query.filter_by(ip=ip).first()
+            if existing:
+                return existing
 
     return None
 
@@ -1057,26 +1070,19 @@ def register_camera(register_info: dict) -> str:
                         port = 1935  # RTMP默认端口
             logger.info(f'设备 {id} 是RTMP流，从地址中提取IP: {ip}, 端口: {port}')
         else:
-            # RTSP地址格式：rtsp://username:password@ip:port/path 或 rtsp://ip:port/path
-            rtsp_pattern = r'rtsp://(?:([^:]+):([^@]+)@)?([^:/]+)(?::(\d+))?(?:/.*)?'
-            match = re.match(rtsp_pattern, source)
-            if match:
-                extracted_username = match.group(1)
-                extracted_password = match.group(2)
-                extracted_ip = match.group(3)
-                extracted_port = match.group(4)
-                if not ip:
-                    ip = extracted_ip
-                if not port:
-                    if extracted_port:
-                        port = int(extracted_port)
-                    else:
-                        port = 554  # RTSP默认端口
-                # 如果地址中包含用户名密码，且用户未提供，则使用地址中的
-                if not username and extracted_username:
-                    username = extracted_username
-                if not password and extracted_password:
-                    password = extracted_password
+            auth = parse_rtsp_auth(source)
+            extracted_ip = auth.get("hostname")
+            extracted_port = auth.get("port")
+            extracted_username = auth.get("username")
+            extracted_password = auth.get("password")
+            if not ip and extracted_ip:
+                ip = extracted_ip
+            if not port and extracted_port:
+                port = int(extracted_port)
+            if not username and extracted_username:
+                username = extracted_username
+            if not password and extracted_password:
+                password = extracted_password
         
         # NVR 挂载通道或显式 skip_onvif：仅用枚举/表单字段，不逐台 ONVIF
         camera_info = {}

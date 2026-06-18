@@ -28,7 +28,14 @@ class AlgorithmTaskDaemon:
     所有必要的信息都通过参数传入。
     """
 
-    def __init__(self, task_id: int, log_path: str, task_type: str = 'realtime', llm_enabled: bool = False):
+    def __init__(
+        self,
+        task_id: int,
+        log_path: str,
+        task_type: str = 'realtime',
+        llm_enabled: bool = False,
+        extra_env: dict = None,
+    ):
         """
         初始化守护进程
         
@@ -37,11 +44,13 @@ class AlgorithmTaskDaemon:
             log_path: 日志文件路径（目录）
             task_type: 任务类型 ('realtime' 实时算法任务, 'snap' 抓拍算法任务)
             llm_enabled: 是否启用LLM
+            extra_env: 启动时注入子进程的额外环境变量（如 SAM 配置，避免守护进程查库）
         """
         self._process = None
         self._task_id = task_id
         self._log_path = log_path
         self._task_type = task_type
+        self._extra_env = extra_env or {}
         self._running = True  # 守护线程是否继续运行
         self._restart = False  # 手动重启标志
         threading.Thread(target=self._daemon, daemon=True).start()
@@ -206,11 +215,17 @@ class AlgorithmTaskDaemon:
                     
                     # 等待进程结束
                     return_code = self._process.wait()
-                    self._log(f'进程已退出，返回码: {return_code}', 'INFO' if return_code == 0 else 'WARNING')
+                    # SIGTERM(-15) 来自 stop()/restart() 时为预期行为，勿当作异常崩溃
+                    graceful_stop = (
+                        return_code in (-15, 15)
+                        and (not self._running or self._restart)
+                    )
+                    log_level = 'INFO' if return_code == 0 or graceful_stop else 'WARNING'
+                    self._log(f'进程已退出，返回码: {return_code}', log_level)
                     f_log.write(f'\n# 进程退出，返回码: {return_code}\n')
                     
                     # 如果进程异常退出，记录所有输出用于诊断，并输出到控制台
-                    if return_code != 0:
+                    if return_code != 0 and not graceful_stop:
                         error_summary = []
                         error_summary.append(f'\n# ========== 进程异常退出，完整输出 ==========')
                         f_log.write(f'\n# ========== 进程异常退出，完整输出 ==========\n')
@@ -435,6 +450,7 @@ class AlgorithmTaskDaemon:
             'KAFKA_BOOTSTRAP_SERVERS', 'SAM_SUPPLEMENT_ENABLED', 'SAM_SUPPLEMENT_CONFIG',
             'SAM_PIPELINE_MODE', 'SAM_TEXT_PROMPTS', 'SAM_CONF', 'SAM_TRIGGER',
             'SAM_INTERVAL_FRAMES', 'SAM_MERGE_IOU', 'SAM_RETURN_MASKS',
+            'IOT_SINK_API_URL', 'IOT_SINK_USE_GATEWAY', 'IOT_SINK_HOST', 'IOT_SINK_PORT',
         ):
             val = os.getenv(key)
             if val is not None and val != '':
@@ -475,15 +491,9 @@ class AlgorithmTaskDaemon:
         # 设置日志路径
         env['LOG_PATH'] = self._log_path
 
-        try:
-            from models import AlgorithmTask
-            from app.services.algorithm_task_launcher_service import _inject_sam_supplement_env
-            task = AlgorithmTask.query.get(self._task_id)
-            if task:
-                _inject_sam_supplement_env(env, task)
-        except Exception as e:
-            self._log(f'加载 SAM 补充配置失败: {e}', 'WARNING')
-        
+        if self._extra_env:
+            env.update(self._extra_env)
+
         self._log(
             f'环境变量已设置: TASK_ID={env["TASK_ID"]}, VIDEO_SERVICE_PORT={env["VIDEO_SERVICE_PORT"]}, '
             f'KAFKA_BOOTSTRAP_SERVERS={env["KAFKA_BOOTSTRAP_SERVERS"]}, '

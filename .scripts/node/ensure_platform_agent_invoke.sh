@@ -19,6 +19,13 @@ ensure_platform_agent_if_needed() {
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -qE 'iot-gateway|iot-node'; then
         has_business_stack=true
     fi
+    # IDEA/宿主机直启 Gateway 时容器名检测会漏判，改以 Gateway 健康检查为准
+    if [[ "$has_business_stack" != "true" ]]; then
+        local gw_url="${EASYAIOT_GATEWAY_URL:-http://127.0.0.1:48080}"
+        if curl -fsS --connect-timeout 2 "${gw_url}/actuator/health" >/dev/null 2>&1; then
+            has_business_stack=true
+        fi
+    fi
     if [[ "$has_business_stack" != "true" && "${EASYAIOT_FORCE_PLATFORM_AGENT_SYNC:-}" != "1" ]]; then
         return 0
     fi

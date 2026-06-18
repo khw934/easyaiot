@@ -19,6 +19,8 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
+from app.utils.ffmpeg_compat import ffmpeg_rtsp_timeout_args
+
 from .frame_queue import FrameQueue
 from .shared_memory import FrameHeader, SharedMemoryManager, create_shared_memory
 
@@ -110,9 +112,9 @@ def build_ffmpeg_decode_cmd(config: DecoderConfig) -> List[str]:
             transport = (config.rtsp_transport or "tcp").strip().lower()
             if transport not in ("tcp", "udp"):
                 transport = "tcp"
+            cmd.extend(["-rtsp_transport", transport])
+            cmd.extend(ffmpeg_rtsp_timeout_args(10_000_000, 10_000_000))
             cmd.extend([
-                "-rtsp_transport", transport,
-                "-stimeout", "10000000",
                 "-analyzeduration", "1000000",
                 "-probesize", "1000000",
             ])

@@ -160,6 +160,7 @@ def _build_task_deploy_env(task_id: int, task_type: str, log_path: str, server_h
         'MINIO_SECURE', 'NACOS_SERVER', 'VIDEO_ENV',
         'CLUSTER_MODE', 'MEDIA_HOST_DATA_ROOT', 'MEDIA_RECORD_DIR', 'MEDIA_SNAP_DIR',
         'MEDIA_UPLOAD_MODE', 'MEDIA_SNAP_UPLOAD_MODE', 'ALERT_IMAGES_DIR',
+        'IOT_SINK_API_URL', 'IOT_SINK_USE_GATEWAY', 'IOT_SINK_HOST', 'IOT_SINK_PORT',
     ):
         val = os.getenv(key)
         if val is not None and val != '':
@@ -309,18 +310,21 @@ def _get_log_path(task_id: int) -> str:
     return log_dir
 
 
-def cleanup_orphaned_processes(task_id: int):
+def cleanup_orphaned_processes(task_id: int, extra_protected_pids: set = None):
     """清理遗留的进程（包括run_deploy.py和FFmpeg进程）
     
     Args:
         task_id: 算法任务ID
+        extra_protected_pids: 额外需要保护的 PID（如刚启动、尚未写入 daemon._process 时）
     """
+    # 仅清理实时算法服务，避免误杀 stream_forward 等同 TASK_ID 的 run_deploy
+    realtime_deploy_marker = os.path.join('realtime_algorithm_service', 'run_deploy.py')
+    orphan_terminate_timeout = int(os.getenv('ALGORITHM_ORPHAN_TERMINATE_TIMEOUT', '12'))
     try:
         import psutil
-        import os
         
         # 获取当前守护进程管理的进程PID（如果存在）
-        protected_pids = set()
+        protected_pids = set(extra_protected_pids or ())
         with _daemons_lock:
             if task_id in _running_daemons:
                 daemon = _running_daemons[task_id]
@@ -348,10 +352,6 @@ def cleanup_orphaned_processes(task_id: int):
                         logger.debug(f"守护进程正在启动中（task_id={task_id}），跳过清理遗留进程")
                         return
         
-        # 查找所有相关的进程
-        target_script = 'run_deploy.py'
-        target_env = f'TASK_ID={task_id}'
-        
         killed_count = 0
         for proc in psutil.process_iter(['pid', 'name', 'cmdline', 'environ']):
             try:
@@ -359,20 +359,17 @@ def cleanup_orphaned_processes(task_id: int):
                 if not cmdline:
                     continue
                 
-                # 检查是否是run_deploy.py进程且环境变量匹配
-                # 更精确的检查：脚本路径必须以run_deploy.py结尾
-                is_target = False
                 cmdline_str = ' '.join(cmdline)
+                if realtime_deploy_marker not in cmdline_str:
+                    continue
                 
-                # 检查脚本路径是否真的以run_deploy.py结尾（更精确的匹配）
-                script_path_match = False
-                for arg in cmdline:
-                    arg_str = str(arg)
-                    # 检查是否是脚本路径（以run_deploy.py结尾）
-                    if arg_str.endswith(target_script) or arg_str.endswith(target_script.replace('.py', '')):
-                        script_path_match = True
-                        break
+                # 检查是否是run_deploy.py进程且环境变量匹配
+                is_target = False
                 
+                # 检查脚本路径是否为实时算法服务
+                script_path_match = any(
+                    realtime_deploy_marker in str(arg) for arg in cmdline
+                )
                 if script_path_match:
                     # 优先检查环境变量（最可靠）
                     try:
@@ -425,7 +422,7 @@ def cleanup_orphaned_processes(task_id: int):
                                 # 检查父进程脚本路径
                                 parent_script_match = False
                                 for arg in parent_cmdline:
-                                    if str(arg).endswith(target_script):
+                                    if realtime_deploy_marker in str(arg):
                                         parent_script_match = True
                                         break
                                 
@@ -467,13 +464,13 @@ def cleanup_orphaned_processes(task_id: int):
                         # 先尝试优雅终止
                         proc.terminate()
                         try:
-                            proc.wait(timeout=3)
+                            proc.wait(timeout=orphan_terminate_timeout)
                             logger.info(f"✅ 遗留进程 {proc_pid} 已优雅终止")
                         except psutil.TimeoutExpired:
-                            # 强制终止
-                            proc.kill()
-                            proc.wait(timeout=1)
-                            logger.warning(f"⚠️ 遗留进程 {proc_pid} 已强制终止")
+                            if proc.is_running():
+                                proc.kill()
+                                proc.wait(timeout=1)
+                                logger.warning(f"⚠️ 遗留进程 {proc_pid} 已强制终止")
                         killed_count += 1
                     except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
                         # 进程已经不存在或无权访问
@@ -490,26 +487,21 @@ def cleanup_orphaned_processes(task_id: int):
     except ImportError:
         # psutil未安装，使用ps命令（Linux）
         try:
-            # 获取当前守护进程管理的进程PID（如果存在）
-            protected_pids = set()
+            protected_pids = set(extra_protected_pids or ())
             with _daemons_lock:
                 if task_id in _running_daemons:
                     daemon = _running_daemons[task_id]
-                    # 保护正在运行的守护进程管理的进程
                     if daemon._running:
                         if daemon._process:
                             try:
                                 if daemon._process.poll() is None:
                                     protected_pids.add(daemon._process.pid)
-                            except:
+                            except Exception:
                                 pass
                         else:
-                            # 进程为None但守护进程还在运行，说明可能正在启动中
-                            # 为了安全起见，不清理任何进程
                             logger.debug(f"守护进程正在启动中（task_id={task_id}），跳过清理遗留进程")
                             return
             
-            # 查找run_deploy.py进程
             result = subprocess.run(
                 ['ps', 'aux'],
                 capture_output=True,
@@ -520,27 +512,24 @@ def cleanup_orphaned_processes(task_id: int):
                 lines = result.stdout.split('\n')
                 pids_to_kill = []
                 for line in lines:
-                    if 'run_deploy.py' in line and f'TASK_ID={task_id}' in line:
-                        parts = line.split()
-                        if len(parts) > 1:
-                            try:
-                                pid = int(parts[1])
-                                # 检查是否是受保护的进程
-                                if pid not in protected_pids:
-                                    pids_to_kill.append(pid)
-                            except ValueError:
-                                pass
+                    if realtime_deploy_marker not in line or f'TASK_ID={task_id}' not in line:
+                        continue
+                    parts = line.split()
+                    if len(parts) > 1:
+                        try:
+                            pid = int(parts[1])
+                            if pid not in protected_pids:
+                                pids_to_kill.append(pid)
+                        except ValueError:
+                            pass
                 
-                # 终止找到的进程及其子进程
                 for pid in pids_to_kill:
                     try:
-                        # 终止进程组
                         os.killpg(os.getpgid(pid), signal.SIGTERM)
-                        time.sleep(1)
-                        # 如果还在运行，强制终止
+                        time.sleep(orphan_terminate_timeout)
                         try:
                             os.killpg(os.getpgid(pid), signal.SIGKILL)
-                        except:
+                        except (ProcessLookupError, OSError):
                             pass
                         logger.info(f"🧹 清理遗留进程: PID={pid} (task_id={task_id})")
                     except (ProcessLookupError, OSError):
@@ -566,9 +555,16 @@ def stop_service_process(task_id: int, service_type: str):
             if task_start_lock.acquire(blocking=True, timeout=5):
                 task_start_lock.release()
     
-    task = AlgorithmTask.query.get(task_id)
-    was_remote = bool(task and task.node_id)
-    if was_remote:
+    task = None
+    was_remote = False
+    try:
+        task = AlgorithmTask.query.get(task_id)
+        was_remote = bool(task and task.node_id)
+    except RuntimeError:
+        # stop_algorithm_task 在后台线程执行 teardown 时无 Flask 上下文，仅做本机进程清理
+        logger.debug('无 Flask 应用上下文，跳过远程任务数据库操作: task_id=%s', task_id)
+
+    if was_remote and task:
         _stop_remote_task(task_id, task.node_id)
         task.node_id = None
         task.service_process_id = None
@@ -697,35 +693,13 @@ def start_task_services(task_id: int, task: AlgorithmTask) -> Tuple[bool, str, b
             with _daemons_lock:
                 if task_id in _running_daemons:
                     existing_daemon = _running_daemons[task_id]
+                    # 守护线程已启动但子进程尚未 Popen（如 conda 查找期间），勿误判为失败并 stop
+                    if existing_daemon._running and existing_daemon._process is None:
+                        logger.warning(f"任务 {task_id} 的守护进程正在启动中，跳过重复启动")
+                        return (True, "任务正在启动中", True)
                     if existing_daemon._running and existing_daemon._process and existing_daemon._process.poll() is None:
-                        # 守护进程正在运行，检查是否真的是我们的进程
-                        try:
-                            import psutil
-                            proc = psutil.Process(existing_daemon._process.pid)
-                            cmdline = proc.cmdline()
-                            
-                            # 更精确的检查：脚本路径必须以run_deploy.py结尾
-                            script_path_match = False
-                            for arg in cmdline:
-                                if str(arg).endswith('run_deploy.py'):
-                                    script_path_match = True
-                                    break
-                            
-                            if script_path_match:
-                                # 检查环境变量
-                                try:
-                                    environ = proc.environ()
-                                    if environ.get('TASK_ID') == str(task_id):
-                                        logger.warning(f"任务 {task_id} 的服务已在运行，跳过启动")
-                                        return (True, "任务运行中", True)
-                                except:
-                                    # 如果无法获取环境变量，假设是同一个进程（因为脚本路径匹配）
-                                    logger.warning(f"任务 {task_id} 的服务已在运行（无法验证环境变量），跳过启动")
-                                    return (True, "任务运行中", True)
-                        except (ImportError, psutil.NoSuchProcess, psutil.AccessDenied):
-                            # psutil未安装或进程不存在，使用poll结果
-                            logger.warning(f"任务 {task_id} 的服务已在运行，跳过启动")
-                            return (True, "任务运行中", True)
+                        logger.warning(f"任务 {task_id} 的服务已在运行，跳过启动")
+                        return (True, "任务运行中", True)
             
             # 只有在没有运行的守护进程时才清理遗留进程
             if should_cleanup:
@@ -745,9 +719,9 @@ def start_task_services(task_id: int, task: AlgorithmTask) -> Tuple[bool, str, b
                             except:
                                 pass
                             del _running_daemons[task_id]
-                        elif daemon._process is None:
-                            # 进程为None且守护进程已停止，清理
-                            logger.info('守护进程启动失败，清理并重新启动...')
+                        elif daemon._process is None and not daemon._running:
+                            # 守护进程已退出且从未拉起子进程，清理后重建
+                            logger.info('守护进程已停止且未拉起子进程，清理并重新启动...')
                             try:
                                 daemon.stop()
                             except:
@@ -759,12 +733,24 @@ def start_task_services(task_id: int, task: AlgorithmTask) -> Tuple[bool, str, b
             
             # 启动守护进程（传入所有必要参数，不需要数据库连接）
             logger.info(f'启动守护进程，任务ID: {task_id}, 任务类型: {task.task_type}')
+            extra_env = {}
+            _inject_sam_supplement_env(extra_env, task)
             daemon = None
             with _daemons_lock:
+                # 替换前务必 stop 旧守护线程，避免 dict 覆盖后遗留孤儿线程
+                if task_id in _running_daemons:
+                    old_daemon = _running_daemons[task_id]
+                    if old_daemon._running:
+                        try:
+                            old_daemon.stop()
+                        except Exception:
+                            pass
+                    del _running_daemons[task_id]
                 daemon = AlgorithmTaskDaemon(
                     task_id=task_id,
                     log_path=log_path,
-                    task_type=task.task_type
+                    task_type=task.task_type,
+                    extra_env=extra_env,
                 )
                 _running_daemons[task_id] = daemon
             
@@ -783,11 +769,6 @@ def start_task_services(task_id: int, task: AlgorithmTask) -> Tuple[bool, str, b
                 if not daemon._running:
                     # 守护进程已停止，退出等待
                     break
-            
-            # 如果进程已启动，立即清理一次遗留进程（这次会保护新进程）
-            if process_pid:
-                logger.debug(f'新进程已启动 (PID: {process_pid})，再次清理遗留进程（会保护新进程）...')
-                cleanup_orphaned_processes(task_id)
             
             task_type_name = {
                 'realtime': '实时算法',

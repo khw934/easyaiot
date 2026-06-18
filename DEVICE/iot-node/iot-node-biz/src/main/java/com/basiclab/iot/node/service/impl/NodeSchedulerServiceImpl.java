@@ -237,7 +237,7 @@ public class NodeSchedulerServiceImpl implements NodeSchedulerService {
         }
         String workloadType = reqVO.getWorkloadType();
         if ("model_train".equals(workloadType)) {
-            return true;
+            return req != null && Boolean.TRUE.equals(req.getRequireCephMount());
         }
         if (!"algorithm_task".equals(workloadType)) {
             return false;

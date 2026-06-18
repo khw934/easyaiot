@@ -90,6 +90,7 @@ import {
   deleteFaceEntry,
   getFacePerson,
   setFacePersonCover,
+  unwrapFaceApiEntity,
   type FaceEntry,
   type FaceLibrary,
   type FacePerson,
@@ -132,8 +133,11 @@ async function loadDetail() {
   loading.value = true;
   try {
     const res = await getFacePerson(person.value.id, true);
-    person.value = res.data;
-    entries.value = res.data?.entries || [];
+    const data = unwrapFaceApiEntity(res);
+    if (data) {
+      person.value = data;
+      entries.value = data.entries || [];
+    }
   } catch (e: any) {
     createMessage.error(e?.message || '加载人员详情失败');
     entries.value = [];
@@ -159,7 +163,8 @@ async function handleSetCover(entryId: number) {
   settingCoverId.value = entryId;
   try {
     const res = await setFacePersonCover(person.value.id, entryId);
-    person.value = res.data;
+    const data = unwrapFaceApiEntity(res);
+    if (data) person.value = data;
     createMessage.success('封面已更新');
     emit('success');
   } catch (e: any) {

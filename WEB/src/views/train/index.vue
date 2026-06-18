@@ -8,7 +8,7 @@
         @tabClick="handleTabClick"
       >
         <TabPane key="1" tab="模型管理">
-          <GpuStackMonitorTip class="page-monitor-tip" />
+<!--          <GpuStackMonitorTip class="page-monitor-tip" />-->
           <ModelList />
         </TabPane>
         <TabPane key="6" tab="模型训练">

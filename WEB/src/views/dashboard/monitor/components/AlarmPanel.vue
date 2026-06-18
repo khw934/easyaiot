@@ -12,6 +12,7 @@
         v-for="alarm in alarmList"
         :key="alarm.id"
         class="alarm-item"
+        @click="handleAlarmClick(alarm)"
       >
         <div class="alarm-image">
           <img 
@@ -65,6 +66,14 @@ const props = defineProps<{
   alarmList?: any[]
   todayAlarmCount?: number
 }>()
+
+const emit = defineEmits<{
+  'play-alarm': [alarm: any]
+}>()
+
+const handleAlarmClick = (alarm: any) => {
+  emit('play-alarm', alarm)
+}
 
 // 获取告警图标
 const getAlarmIcon = (type: string) => {
@@ -278,6 +287,7 @@ const handleImageLoad = (alarm: any) => {
   border-left: 3px solid #ff4d4f;
   transition: all 0.3s;
   position: relative;
+  cursor: pointer;
   
   &:hover {
     background: linear-gradient(135deg, rgba(52, 134, 218, 0.25), rgba(48, 82, 174, 0.15));

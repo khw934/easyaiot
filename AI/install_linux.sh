@@ -78,10 +78,8 @@ prepare_cached_resources_for_module() {
     fi
     if [ "${AUTO_CACHE_PIP:-1}" = "1" ] && [ -f "$cache_script" ]; then
         print_warning "[${module}] 首次需预下载 pip 离线包，可能需要 10–30 分钟..."
-        BASE_IMAGE="${BASE_IMAGE:-pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel}" \
-            "$cache_script" "$module" || \
-            BASE_IMAGE="${BASE_IMAGE:-pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel}" \
-            /bin/bash "$cache_script" "$module" || true
+        # BASE_IMAGE 可能已是 runtime（供 docker build）；cache 脚本会自行选用 devel 编译 sdist
+        "$cache_script" "$module" || /bin/bash "$cache_script" "$module" || true
     fi
 }
 

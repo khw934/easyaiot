@@ -201,6 +201,7 @@ import {
   deleteFacePerson,
   getFaceLibrary,
   listFacePersons,
+  unwrapFaceApiEntity,
   type FaceLibrary,
   type FacePerson,
 } from '@/api/device/face_library';
@@ -341,7 +342,7 @@ async function loadLibrary() {
   if (!libraryId.value) return;
   try {
     const res = await getFaceLibrary(libraryId.value);
-    library.value = res.data || null;
+    library.value = unwrapFaceApiEntity(res);
   } catch (e: any) {
     createMessage.error(e?.message || '加载人脸库失败');
   }
@@ -402,13 +403,15 @@ function handleSuccess() {
 }
 
 function handleAddPerson() {
-  openEntryModal(true, { type: 'create', library: library.value });
+  const lib = library.value ?? ({ id: libraryId.value } as FaceLibrary);
+  openEntryModal(true, { type: 'create', library: lib });
 }
 
 function handleAddPhoto(person: FacePerson) {
+  const lib = library.value ?? ({ id: libraryId.value } as FaceLibrary);
   openEntryModal(true, {
     type: 'create',
-    library: library.value,
+    library: lib,
     person,
     addToPerson: true,
   });

@@ -176,18 +176,64 @@ def _kafka_topic_for_alert_task_type(task_type: str) -> str:
         return os.getenv('KAFKA_ALERT_NOTIFICATION_TOPIC', 'iot-alert-notification')
 
 
+def _query_alert_event_task(device_id: str, task_type: str = None) -> Optional[Dict]:
+    """
+    查询设备的告警事件任务配置（仅需 alert_event_enabled，不要求告警通知）。
+    """
+    if not device_id:
+        return None
+    try:
+        tt = task_type or 'realtime'
+        if tt == 'snapshot':
+            tt = 'snap'
+
+        filter_conditions = [
+            AlgorithmTask.devices.any(Device.id == device_id),
+            AlgorithmTask.alert_event_enabled == True,
+            AlgorithmTask.is_enabled == True,
+        ]
+        if tt:
+            filter_conditions.append(AlgorithmTask.task_type == tt)
+
+        task = AlgorithmTask.query.filter(*filter_conditions).order_by(AlgorithmTask.id.asc()).first()
+        if not task:
+            return None
+
+        return {
+            'task_id': task.id,
+            'task_name': task.task_name,
+            'task_type': task.task_type,
+            'face_detection_enabled': bool(task.face_detection_enabled),
+            'plate_detection_enabled': bool(task.plate_detection_enabled),
+            'alert_event_suppress_time': task.alert_event_suppress_time,
+        }
+    except Exception as e:
+        logger.error(f"查询告警事件任务失败: device_id={device_id}, error={e}", exc_info=True)
+        return None
+
+
 def _build_minimal_alert_kafka_message(
         alert_data: Dict,
         detection_switches: Optional[Dict],
+        alert_event_task: Optional[Dict] = None,
 ) -> Dict:
     """
     精简告警 Kafka 消息（无通知人配置时使用）。
     必须与 iot-sink AlertNotificationMessage / Python 驼峰字段一致，否则 sink 无法解析 imagePath、无法上传 MinIO。
     """
     sw = detection_switches or {}
+    task_id = alert_event_task.get('task_id') if alert_event_task else None
+    task_name = alert_event_task.get('task_name') if alert_event_task else None
+    task_type = (
+        alert_data.get('task_type')
+        or (alert_event_task.get('task_type') if alert_event_task else None)
+        or 'realtime'
+    )
     message = {
         'deviceId': alert_data.get('device_id'),
         'deviceName': alert_data.get('device_name'),
+        'taskId': task_id,
+        'taskName': task_name,
         'alert': {
             'object': alert_data.get('object'),
             'event': alert_data.get('event'),
@@ -196,7 +242,7 @@ def _build_minimal_alert_kafka_message(
             'imagePath': alert_data.get('image_path'),
             'recordPath': alert_data.get('record_path'),
             'time': alert_data.get('time', datetime.now().strftime('%Y-%m-%d %H:%M:%S')),
-            'taskType': alert_data.get('task_type', 'realtime'),
+            'taskType': task_type,
         },
         'notifyUsers': None,
         'notifyMethods': None,
@@ -399,7 +445,11 @@ def _query_alert_notification_config(device_id: str, task_type: str = None) -> O
         return None
 
 
-def _resolve_detection_switches_from_alert_data(alert_data: Dict, notification_config: Optional[Dict] = None) -> Dict:
+def _resolve_detection_switches_from_alert_data(
+        alert_data: Dict,
+        notification_config: Optional[Dict] = None,
+        alert_event_task: Optional[Dict] = None,
+) -> Dict:
     """
     从告警数据中提取人脸/车牌检测开关。
     优先使用 alert_data 透传值，不再额外查询数据库。
@@ -420,12 +470,16 @@ def _resolve_detection_switches_from_alert_data(alert_data: Dict, notification_c
         face_raw = alert_data.get('faceDetectionEnabled')
     if face_raw is None and notification_config:
         face_raw = notification_config.get('face_detection_enabled')
+    if face_raw is None and alert_event_task:
+        face_raw = alert_event_task.get('face_detection_enabled')
 
     plate_raw = alert_data.get('plate_detection_enabled')
     if plate_raw is None:
         plate_raw = alert_data.get('plateDetectionEnabled')
     if plate_raw is None and notification_config:
         plate_raw = notification_config.get('plate_detection_enabled')
+    if plate_raw is None and alert_event_task:
+        plate_raw = alert_event_task.get('plate_detection_enabled')
 
     return {
         'face_detection_enabled': _to_bool(face_raw, False),
@@ -608,6 +662,15 @@ def process_alert_hook(alert_data: Dict) -> Dict:
                 )
                 return {'status': 'suppressed', 'reason': 'alert_event_suppress_interval'}
 
+        alert_event_task = None
+        if device_id:
+            alert_event_task = _query_alert_event_task(device_id, task_type)
+            if not alert_event_task:
+                logger.info(
+                    f"设备未关联已启用的告警事件任务，跳过: device_id={device_id}, task_type={task_type}"
+                )
+                return {'status': 'skipped', 'reason': 'alert_event_disabled'}
+
         notification_config = None
         if device_id:
             logger.info(f"🔍 查询告警通知配置: device_id={device_id}, task_type={task_type}")
@@ -618,11 +681,14 @@ def process_alert_hook(alert_data: Dict) -> Dict:
                           f"notify_users={notification_config.get('notify_users') is not None}, "
                           f"notify_methods={notification_config.get('notify_methods')}")
             else:
-                logger.warning(f"⚠️  未找到告警通知配置: device_id={device_id}, task_type={task_type}。"
-                             f"请检查：1) SnapTask或AlgorithmTask是否存在 2) alarm_enabled是否为True "
-                             f"3) is_enabled是否为True 4) 设备ID是否匹配")
+                logger.info(
+                    f"未配置告警通知（仅落库告警事件）: device_id={device_id}, task_type={task_type}, "
+                    f"alert_task_id={alert_event_task.get('task_id') if alert_event_task else None}"
+                )
 
-        detection_switches = _resolve_detection_switches_from_alert_data(alert_data, notification_config)
+        detection_switches = _resolve_detection_switches_from_alert_data(
+            alert_data, notification_config, alert_event_task
+        )
         
         # 构建告警消息（直接发送原始告警数据，Java端会处理）
         # 如果开启了告警通知，发送到Kafka
@@ -642,7 +708,7 @@ def process_alert_hook(alert_data: Dict) -> Dict:
                 try:
                     if notification_config.get('notification_suppressed'):
                         notification_message = _build_minimal_alert_kafka_message(
-                            alert_data, detection_switches
+                            alert_data, detection_switches, alert_event_task
                         )
                     else:
                         notification_message = _build_notification_message_for_kafka(
@@ -657,7 +723,7 @@ def process_alert_hook(alert_data: Dict) -> Dict:
                                 f"将发送精简消息以保证 iot-sink 落库与 MinIO: device_id={device_id}"
                             )
                             notification_message = _build_minimal_alert_kafka_message(
-                                alert_data, detection_switches
+                                alert_data, detection_switches, alert_event_task
                             )
                     
                     kafka_topic = _kafka_topic_for_alert_task_type(
@@ -736,7 +802,7 @@ def process_alert_hook(alert_data: Dict) -> Dict:
             if producer is not None:
                 try:
                     simple_message = _build_minimal_alert_kafka_message(
-                        alert_data, detection_switches
+                        alert_data, detection_switches, alert_event_task
                     )
 
                     kafka_topic = _kafka_topic_for_alert_task_type(

@@ -1387,6 +1387,45 @@ def load_task_config():
         return False
 
 
+def _ensure_alert_workers_started():
+    """告警事件启用后动态拉起告警检测线程（配置热更新）。"""
+    global alert_executor
+    if alert_executor is not None:
+        return
+    if not task_config or not task_config.alert_event_enabled:
+        return
+    logger.info(f"🔔 检测到告警事件已启用，启动 {ALERT_WORKER_THREADS} 个告警检测线程...")
+    alert_executor = concurrent.futures.ThreadPoolExecutor(
+        max_workers=ALERT_WORKER_THREADS,
+        thread_name_prefix='alert_worker',
+    )
+    for worker_id in range(1, ALERT_WORKER_THREADS + 1):
+        alert_executor.submit(alert_detection_worker, worker_id)
+        logger.info(f"   ✅ 告警检测线程 {worker_id} 已启动（热更新）")
+
+
+def _task_config_reload_worker(interval_sec: int = 30):
+    """定期重载任务配置，使告警开关等变更在重启任务后无需杀进程即可生效。"""
+    while not stop_event.is_set():
+        for _ in range(max(5, interval_sec)):
+            if stop_event.is_set():
+                return
+            time.sleep(1)
+        try:
+            prev_alert_enabled = bool(task_config and task_config.alert_event_enabled)
+            if not load_task_config():
+                continue
+            now_alert_enabled = bool(task_config and task_config.alert_event_enabled)
+            if now_alert_enabled and not prev_alert_enabled:
+                _ensure_alert_workers_started()
+            elif now_alert_enabled != prev_alert_enabled:
+                logger.info(
+                    f"任务配置已热更新: alert_event_enabled {prev_alert_enabled} -> {now_alert_enabled}"
+                )
+        except Exception as exc:
+            logger.warning(f"任务配置热更新失败: {exc}")
+
+
 def send_alert_event_async(alert_data: Dict):
     """异步发送告警事件到 sink hook 接口（后台线程）"""
 
@@ -3561,9 +3600,9 @@ def signal_handler(sig, frame):
     # 清理所有资源（FFmpeg进程、VideoCapture等）
     cleanup_all_resources()
 
-    # 等待所有线程结束（增加等待时间）
+    # 等待工作线程收尾（缩短等待，避免外部 SIGKILL 与优雅退出竞态）
     logger.info("⏳ 等待所有线程结束...")
-    time.sleep(3)
+    time.sleep(0.5)
 
     logger.info("✅ 所有服务已停止")
     sys.exit(0)
@@ -3661,6 +3700,16 @@ def main():
     logger.info("💓 启动心跳上报线程...")
     heartbeat_thread = threading.Thread(target=heartbeat_worker, daemon=True)
     heartbeat_thread.start()
+
+    reload_interval = int(os.getenv('TASK_CONFIG_RELOAD_INTERVAL', '30'))
+    logger.info(f"🔄 启动任务配置热更新线程（间隔 {reload_interval}s）...")
+    config_reload_thread = threading.Thread(
+        target=_task_config_reload_worker,
+        args=(reload_interval,),
+        daemon=True,
+        name='task_config_reload',
+    )
+    config_reload_thread.start()
 
     # 启动SRS录像清理线程
     logger.info("🧹 启动SRS录像清理线程...")

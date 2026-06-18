@@ -18,6 +18,7 @@ from app.services.media_dvr_utils import (
     ffprobe_video_duration_seconds,
     parse_srs_dvr_path_date,
     resolve_playback_absolute_path,
+    srs_dvr_min_file_bytes,
     wait_dvr_file_stable,
 )
 from app.services.media_kafka_service import publish_dvr_dlq
@@ -41,8 +42,12 @@ def process_dvr_event(event: Dict[str, Any]) -> bool:
             device_id = resolved_id
 
     if not device:
-        logger.warning('DVR 上传：设备不存在 stream=%s file=%s', stream, file_path)
-        return False
+        absolute_file_path = resolve_playback_absolute_path(file_path, cwd) if file_path else ''
+        if absolute_file_path:
+            from app.services.playback_disk_guard_service import remove_playback_file
+            remove_playback_file(absolute_file_path, reason='设备已删除')
+        logger.info('DVR 上传：设备不存在，已丢弃本地回放 stream=%s file=%s', stream, file_path)
+        return True
 
     from app.services.record_space_service import (
         create_record_space_for_device,
@@ -61,6 +66,19 @@ def process_dvr_event(event: Dict[str, Any]) -> bool:
     absolute_file_path = resolve_playback_absolute_path(file_path, cwd)
     file_size = wait_dvr_file_stable(absolute_file_path)
     if file_size <= 0:
+        min_bytes = srs_dvr_min_file_bytes()
+        try:
+            if os.path.exists(absolute_file_path):
+                sz = os.path.getsize(absolute_file_path)
+                if 0 < sz < min_bytes:
+                    logger.info(
+                        'DVR 片段过小已丢弃 file=%s size=%s min=%s',
+                        absolute_file_path, sz, min_bytes,
+                    )
+                    _cleanup_local_file(absolute_file_path, device_id)
+                    return True
+        except OSError:
+            pass
         logger.warning('DVR 文件未就绪或过小 file=%s', absolute_file_path)
         return False
 

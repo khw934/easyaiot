@@ -213,7 +213,7 @@ def alert_hook():
         
         if result.get('status') == 'success':
             return api_response(200, '告警事件已发送', result)
-        elif result.get('status') == 'skipped':
+        elif result.get('status') in ('skipped', 'suppressed'):
             return api_response(200, '告警事件已跳过', result)
         else:
             return api_response(500, f"告警事件处理失败: {result.get('error', '未知错误')}", result)

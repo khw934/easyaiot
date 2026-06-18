@@ -16,13 +16,17 @@ logger = logging.getLogger(__name__)
 
 
 def _sink_enqueue_url() -> str:
-    gateway = os.getenv('JAVA_BACKEND_URL', os.getenv('GATEWAY_URL', 'http://localhost:48080')).rstrip('/')
     explicit = (os.getenv('IOT_SINK_API_URL') or '').strip().rstrip('/')
     if explicit:
-        base = explicit
-    else:
-        base = f'{gateway}/admin-api/sink'
-    return f'{base}/post-process/enqueue'
+        return f'{explicit}/post-process/enqueue'
+    # 算法进程与 iot-sink 同机部署，默认直连 sink-server（48092），避免网关路由配置影响内网入队
+    use_gateway = (os.getenv('IOT_SINK_USE_GATEWAY') or '').strip().lower() in ('1', 'true', 'yes')
+    if not use_gateway:
+        host = (os.getenv('IOT_SINK_HOST') or '127.0.0.1').strip()
+        port = (os.getenv('IOT_SINK_PORT') or '48092').strip()
+        return f'http://{host}:{port}/post-process/enqueue'
+    gateway = os.getenv('JAVA_BACKEND_URL', os.getenv('GATEWAY_URL', 'http://localhost:48080')).rstrip('/')
+    return f'{gateway}/admin-api/sink/post-process/enqueue'
 
 
 def build_post_process_request_message(

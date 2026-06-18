@@ -210,6 +210,10 @@ verify_service "Kafka" "kafka-server" "9092,9093" \
 verify_service "MinIO" "minio-server" "9000,9001" \
     "curl -f http://127.0.0.1:9000/minio/health/live > /dev/null 2>&1"
 
+# Milvus
+verify_service "Milvus" "milvus-server" "9091,19530" \
+    "curl -f http://127.0.0.1:9091/healthz > /dev/null 2>&1"
+
 # SRS
 verify_service "SRS" "srs-server" "1935,1985,8080" \
     "curl -f http://127.0.0.1:1985/api/v1/versions > /dev/null 2>&1"
@@ -218,17 +222,17 @@ verify_service "SRS" "srs-server" "1935,1985,8080" \
 verify_service "NodeRED" "nodered-server" "1880" \
     "curl -f http://127.0.0.1:1880/ > /dev/null 2>&1"
 
+# VSCode (OpenVSCode Server)
+verify_service "VSCode" "openvscode-server" "10192" \
+    "curl -f http://127.0.0.1:10192/ > /dev/null 2>&1"
+
 # EMQX
 verify_service "EMQX" "emqx-server" "1883,8883,8083,8084,18083" \
     "docker exec emqx-server /opt/emqx/bin/emqx ctl status > /dev/null 2>&1"
 
-# GPUStack v2.1.2
-verify_service "GPUStack" "gpustack-server" "10180,10161" \
-    "curl -f http://127.0.0.1:10180/ > /dev/null 2>&1"
-
-# Dify 1.14.2（独立 compose project: dify）
-verify_service "Dify" "dify-nginx-1" "10190" \
-    "curl -f http://127.0.0.1:10190/ > /dev/null 2>&1"
+# ZLMediaKit
+verify_service "ZLMediaKit" "zlmediakit-server" "6080" \
+    "curl -f http://127.0.0.1:6080/index/api/getServerConfig > /dev/null 2>&1"
 
 # 显示总结
 print_section "验证总结"

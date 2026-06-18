@@ -67,7 +67,8 @@ spring:
           predicates:
             - Path=/admin-api/sink/**
           filters:
-            - RewritePath=/admin-api/sink/(?<segment>.*), /admin/$\{segment}
+            # 去掉 /admin-api/sink 前缀，与 sink 内 @RequestMapping("/post-process") 等路径对齐（勿加 /admin）
+            - RewritePath=/admin-api/sink/(?<segment>.*), /$\{segment}
         # 文件服务
         - id: file-admin-api
           uri: lb://file-server

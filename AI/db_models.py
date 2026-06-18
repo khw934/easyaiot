@@ -64,8 +64,8 @@ class TrainTask(db.Model):
     metrics_path = db.Column(db.Text)
     minio_model_path = db.Column(db.String(500))
     train_results_path = db.Column(db.String(500))
-    schedule_policy = db.Column(db.String(20), default='local', nullable=True,
-                               comment='调度策略: local/auto/node')
+    schedule_policy = db.Column(db.String(20), default='auto', nullable=True,
+                               comment='调度策略: auto/node（local 已废弃，兼容旧数据）')
     target_node_id = db.Column(db.BigInteger, nullable=True, comment='指定部署节点ID')
     node_id = db.Column(db.BigInteger, nullable=True, comment='实际运行节点ID')
     service_server_ip = db.Column(db.String(128), nullable=True, comment='实际运行节点 IP/主机')
