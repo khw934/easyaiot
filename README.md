@@ -116,6 +116,7 @@ Many intelligent IoT projects stall at deployment: <strong>full features won't f
   <li><strong>Alarm Recording</strong>: Supports automatic recording triggered by alarm events. When abnormal events are detected, relevant video clips are automatically recorded, providing a complete alarm evidence chain. Supports viewing, downloading, and management of alarm recordings</li>
   <li><strong>Alarm Events</strong>: Provides comprehensive alarm event management functionality, supporting real-time alarm event push, historical query, statistical analysis, event processing, and status tracking, achieving full lifecycle management of alarms</li>
   <li><strong>Video Playback</strong>: Supports fast retrieval and playback of historical recordings, providing convenient operations such as timeline positioning, variable speed playback, and keyframe jumping. Supports synchronized playback of multiple video streams, meeting event backtracking and analysis needs</li>
+  <li><strong>Mobile APP Admin Console</strong>: A cross-platform mobile admin console built on uni-app 3, compiling one codebase to H5, WeChat Mini Program, and native App. Shares the same backend API (<code>/admin-api</code>) as the PC (WEB) client, enabling ops and management staff to control the platform anytime, anywhere from mobile devices. Core tabs cover <strong>Devices</strong> (unified list and channel browsing for direct cameras, GB28181, and NVR; one-tap live preview in device details), <strong>Stream Forwarding</strong> (task creation, start/stop, cluster node status, and multi-stream URL viewing), <strong>Algorithms</strong> (real-time/snapshot algorithm task list, start/stop control, and detection stats), <strong>Alerts</strong> (alert search, snapshot preview, and alarm recording VOD playback), <strong>Models</strong> (model list and deployment status), <strong>Inference</strong> (mobile image inference workbench: pick model, upload image, view results), <strong>Training</strong> (training task progress monitoring and one-tap stop), and <strong>Profile</strong> (personal info, account security, multi-tenant switching, and app settings). H5 integrates the Jessibuca low-latency player for FLV/HLS live streams and alarm recording VOD; OAuth2 dual-token auth with Pinia state persistence keeps sessions alive automatically—bringing cloud-edge-device intelligent control to phones and mini programs</li>
 </ul>
 
 #### 🌐 IoT Capabilities
@@ -179,7 +180,7 @@ Innovatively leveraging large models to construct a zero-shot labeling technical
 ### 🏗️ Project Architecture Features
 
 <p style="font-size: 14px; line-height: 1.8; color: #555; margin: 15px 0;">
-EasyAIoT is not actually one project; it is six distinct projects.
+EasyAIoT is not actually one project; it is seven distinct projects.
 </p>
 
 <p style="font-size: 14px; line-height: 1.8; color: #555; margin: 15px 0;">
@@ -242,7 +243,7 @@ EasyAIoT actively responds to localization strategies, providing comprehensive s
 ## 🧩 Project Structure
 
 <p style="font-size: 15px; line-height: 1.8; color: #333; margin: 15px 0;">
-EasyAIoT consists of six core projects:
+EasyAIoT consists of seven core projects:
 </p>
 
 <table style="width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 14px;">
@@ -253,6 +254,21 @@ EasyAIoT consists of six core projects:
 <tr>
 <td style="padding: 15px; border: 1px solid #e0e0e0; vertical-align: top;"><strong>WEB Module</strong></td>
 <td style="padding: 15px; border: 1px solid #e0e0e0; line-height: 1.8; color: #444;">Frontend management interface based on Vue, providing a unified user interaction experience</td>
+</tr>
+<tr>
+<td style="padding: 15px; border: 1px solid #e0e0e0; vertical-align: top;"><strong>APP Module</strong></td>
+<td style="padding: 15px; border: 1px solid #e0e0e0; line-height: 1.8; color: #444;">
+  <ul style="margin: 5px 0; padding-left: 20px;">
+    <li><strong>Cross-platform Framework</strong>: Built on uni-app 3 + Vue 3 + TypeScript + Vite; one codebase compiles to H5, WeChat Mini Program, and native App</li>
+    <li><strong>API Reuse</strong>: Shares <code>/admin-api</code> backend with the WEB module; OAuth2 dual-token auth with multi-tenant switching</li>
+    <li><strong>Device Management</strong>: Unified list for direct cameras, GB28181, and NVR; online status and channel browsing; live preview in device details (H5 integrates Jessibuca low-latency player)</li>
+    <li><strong>Stream Forwarding</strong>: Task creation, start/stop, cluster node status, and multi-stream URL viewing</li>
+    <li><strong>Algorithm Tasks</strong>: Real-time/snapshot algorithm task list, start/stop control, and detection/frame stats</li>
+    <li><strong>Alert Center</strong>: Alert search, snapshot preview, and alarm recording VOD playback</li>
+    <li><strong>Models & AI</strong>: Model list and deployment status, mobile image inference workbench, training task progress monitoring and stop</li>
+    <li><strong>Profile</strong>: Personal info, account security, FAQ, feedback, and app settings</li>
+  </ul>
+</td>
 </tr>
 <tr>
 <td style="padding: 15px; border: 1px solid #e0e0e0; vertical-align: top;"><strong>DEVICE Module</strong></td>
