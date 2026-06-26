@@ -659,22 +659,23 @@ install_service() {
     configure_gpu
     create_directories
     create_env_file
-    prepare_cached_resources
-    
-    print_info "构建 Docker 镜像（优先复用离线 pip 缓存）..."
-    print_info "架构: $ARCH, 平台: $DOCKER_PLATFORM, 基础镜像: $BASE_IMAGE"
-    print_warning "首次构建可能需要较长时间（10-30分钟），请耐心等待..."
-    print_info "正在下载基础镜像和安装依赖..."
-    print_info "构建进度将实时显示，请勿中断..."
-    echo ""
-    
+
     if [ "${EASYAIOT_SKIP_BUILD:-0}" = "1" ] && docker image inspect ai-service:latest >/dev/null 2>&1; then
-        print_success "镜像已从远程拉取 (ai-service:latest)，跳过构建"
-    elif ! build_with_cache ""; then
-        exit 1
+        print_success "镜像已从远程拉取 (ai-service:latest)，跳过 pip 离线包下载与 Docker 构建"
+    else
+        print_info "构建 Docker 镜像（优先复用离线 pip 缓存）..."
+        print_info "架构: $ARCH, 平台: $DOCKER_PLATFORM, 基础镜像: $BASE_IMAGE"
+        print_warning "首次构建可能需要较长时间（10-30分钟），请耐心等待..."
+        print_info "正在下载基础镜像和安装依赖..."
+        print_info "构建进度将实时显示，请勿中断..."
+        echo ""
+
+        if ! build_with_cache ""; then
+            exit 1
+        fi
+        echo ""
+        print_success "AI 服务镜像构建完成！"
     fi
-    echo ""
-    print_success "AI 服务镜像构建完成！"
     
     print_info "启动服务..."
     cleanup_renamed_containers

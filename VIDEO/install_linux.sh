@@ -472,13 +472,14 @@ install_service() {
     create_env_file
     check_gpu
     configure_compose_gpu "docker-compose.yaml" ".env.docker"
-    prepare_cached_resources
-    
-    print_info "构建 Docker 镜像（优先复用离线 pip 缓存）..."
+
     if [ "${EASYAIOT_SKIP_BUILD:-0}" = "1" ] && docker image inspect video-service:latest >/dev/null 2>&1; then
-        print_success "镜像已从远程拉取 (video-service:latest)，跳过构建"
-    elif ! build_with_cache ""; then
-        exit 1
+        print_success "镜像已从远程拉取 (video-service:latest)，跳过 pip 离线包下载与 Docker 构建"
+    else
+        print_info "构建 Docker 镜像（优先复用离线 pip 缓存）..."
+        if ! build_with_cache ""; then
+            exit 1
+        fi
     fi
     
     print_info "启动服务..."
