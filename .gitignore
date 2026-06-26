@@ -141,4 +141,6 @@ VIDEO/ffmpeg-master-*.tar.xz
 .scripts/docker/.deploy_profile
 .scripts/docker/.web_deploy_profile_built
 .scripts/docker/.runtime_images_pulled
-AI/.env.arch
+
+# install 脚本按架构自动生成的 Docker 构建配置（DOCKER_PLATFORM / BASE_IMAGE）
+**/.env.arch
