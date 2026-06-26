@@ -409,7 +409,7 @@ for m in data.get('manifests', []):
     done
     if $DO_PUSH; then
         print_info "推送 manifest: ${manifest_ref}"
-        if docker manifest push "$manifest_ref" --purge 2>&1; then
+        if runtime_docker_upload_with_retry "推送 manifest ${manifest_ref}" docker manifest push "$manifest_ref" --purge; then
             print_success "manifest 推送成功: ${manifest_ref}"
         else
             print_warning "manifest 推送失败: ${manifest_ref}"
@@ -496,7 +496,7 @@ tag_and_push() {
                 return 1
             fi
             print_info "推送架构镜像: ${remote_ref}"
-            if ! docker push "$remote_ref"; then
+            if ! runtime_docker_push_with_retry "$remote_ref"; then
                 print_error "推送失败: ${remote_ref}"
                 return 1
             fi
@@ -505,7 +505,7 @@ tag_and_push() {
         *)
             if $DO_PUSH; then
                 print_info "推送: ${remote_ref}"
-                docker push "$remote_ref" || { print_error "推送失败: ${remote_ref}"; return 1; }
+                runtime_docker_push_with_retry "$remote_ref" || { print_error "推送失败: ${remote_ref}"; return 1; }
                 print_success "推送成功: ${remote_ref}"
             fi
             ;;
