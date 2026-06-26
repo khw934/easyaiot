@@ -100,6 +100,165 @@ runtime_log_registry_info() {
     runtime_img_msg info "========================================"
 }
 
+# 从 REGISTRY 地址提取主机名（如 docker.cnb.cool/holmesian/easyaiot/ → docker.cnb.cool）
+runtime_registry_host() {
+    local r="${1:-${REGISTRY:-$RUNTIME_IMAGE_REGISTRY}}"
+    r="${r%%/*}"
+    echo "$r"
+}
+
+# 检查 ~/.docker/config.json 是否已保存指定 registry 的登录凭据
+runtime_docker_has_registry_auth() {
+    local host="$1"
+    local config="${DOCKER_CONFIG:-$HOME/.docker}/config.json"
+    [ -f "$config" ] || return 1
+    if ! command -v python3 >/dev/null 2>&1; then
+        # 无 python3 时做简单 grep 兜底
+        grep -qE "\"${host}\"|\"https://${host}\"|\"http://${host}\"" "$config" 2>/dev/null
+        return $?
+    fi
+    python3 - "$host" "$config" <<'PY'
+import json, subprocess, sys
+
+host = sys.argv[1]
+config_path = sys.argv[2]
+
+try:
+    with open(config_path, encoding="utf-8") as f:
+        cfg = json.load(f)
+except OSError:
+    sys.exit(1)
+
+def has_auth_entry(entry):
+    return bool(entry.get("auth") or entry.get("identitytoken"))
+
+auths = cfg.get("auths", {})
+for key in (host, f"https://{host}", f"http://{host}"):
+    if has_auth_entry(auths.get(key, {})):
+        sys.exit(0)
+
+def try_cred_helper(helper, server):
+    if not helper:
+        return False
+    cmd = f"docker-credential-{helper}"
+    try:
+        p = subprocess.run(
+            [cmd, "get"],
+            input=server.encode(),
+            capture_output=True,
+            timeout=10,
+        )
+        return p.returncode == 0 and bool(p.stdout.strip())
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+cred_helpers = cfg.get("credHelpers", {})
+if try_cred_helper(cred_helpers.get(host), host):
+    sys.exit(0)
+
+creds_store = cfg.get("credsStore")
+if try_cred_helper(creds_store, host):
+    sys.exit(0)
+
+sys.exit(1)
+PY
+}
+
+# 输出 CNB 登录/权限失败时的修复指引
+runtime_print_registry_auth_help() {
+    local host="$1" registry="$2" reason="${3:-not_logged_in}"
+    registry=$(runtime_normalize_registry "$registry")
+    runtime_img_msg error "========================================"
+    case "$reason" in
+        no_push_access)
+            runtime_img_msg error "  无法推送到 CNB 镜像仓库（权限不足或仓库路径错误）"
+            ;;
+        *)
+            runtime_img_msg error "  未登录 CNB 镜像仓库，无法执行 build-runtime 推送"
+            ;;
+    esac
+    runtime_img_msg error "========================================"
+    runtime_img_msg error "  目标仓库: ${registry}"
+    runtime_img_msg error "  Registry: ${host}"
+    runtime_img_msg error ""
+    runtime_img_msg error "  请先登录 CNB Docker 制品库（需具有推送权限的访问令牌 CNB_TOKEN）："
+    runtime_img_msg error "    docker login ${host} -u cnb -p \${CNB_TOKEN}"
+    runtime_img_msg error ""
+    runtime_img_msg error "  文档: https://docs.cnb.cool/zh/artifact/docker.html"
+    runtime_img_msg error ""
+    runtime_img_msg error "  若已登录仍失败，请检查："
+    runtime_img_msg error "    1) CNB_TOKEN 是否有效且具有该仓库的 push 权限"
+    runtime_img_msg error "    2) 仓库路径是否正确: ${RUNTIME_REGISTRY_CONFIG} 中 REGISTRY= 须以 / 结尾"
+    runtime_img_msg error "       当前: ${registry}"
+    runtime_img_msg error "    3) 或临时指定: export EASYAIOT_RUNTIME_REGISTRY=your.cool/namespace/project/"
+    runtime_img_msg error "========================================"
+}
+
+# build-runtime 开始前校验 CNB 登录与推送权限（避免构建完成后才推送失败）
+runtime_verify_registry_push_access() {
+    if [ "${EASYAIOT_REGISTRY_AUTH_VERIFIED:-0}" = "1" ]; then
+        return 0
+    fi
+    if [ "${EASYAIOT_SKIP_REGISTRY_AUTH_CHECK:-0}" = "1" ]; then
+        runtime_img_msg warn "已跳过 CNB 仓库登录/推送权限检查 (EASYAIOT_SKIP_REGISTRY_AUTH_CHECK=1)"
+        return 0
+    fi
+
+    local registry host probe_ref push_out rc=0
+    runtime_load_registry
+    registry=$(runtime_normalize_registry "${1:-${REGISTRY:-$RUNTIME_IMAGE_REGISTRY}}")
+    host=$(runtime_registry_host "$registry")
+
+    runtime_img_msg info "检查 CNB 镜像仓库登录与推送权限..."
+    runtime_img_msg info "  Registry: ${host}"
+    runtime_img_msg info "  仓库路径: ${registry}"
+
+    if ! runtime_docker_has_registry_auth "$host"; then
+        runtime_print_registry_auth_help "$host" "$registry" "not_logged_in"
+        return 1
+    fi
+
+    runtime_img_msg info "已检测到 ${host} 登录凭据，正在探测推送权限..."
+
+    probe_ref="${registry}easyaiot-push-auth-check:__probe__"
+    if ! docker image inspect hello-world:latest >/dev/null 2>&1; then
+        runtime_img_msg info "拉取 hello-world（用于推送权限探测）..."
+        if ! docker pull hello-world:latest >/dev/null 2>&1; then
+            runtime_img_msg warn "无法拉取 hello-world，仅验证登录凭据（未探测推送权限）"
+            runtime_img_msg ok "CNB 登录凭据已就绪: ${host}"
+            return 0
+        fi
+    fi
+
+    docker tag hello-world:latest "$probe_ref" >/dev/null 2>&1 || {
+        runtime_img_msg error "创建推送探测标签失败: ${probe_ref}"
+        return 1
+    }
+
+    push_out=$(docker push "$probe_ref" 2>&1) || rc=$?
+    docker rmi "$probe_ref" >/dev/null 2>&1 || true
+
+    if [ "$rc" -ne 0 ]; then
+        if echo "$push_out" | grep -qiE 'no basic auth credentials|unauthorized|authentication required|authorization failed'; then
+            runtime_print_registry_auth_help "$host" "$registry" "not_logged_in"
+            return 1
+        fi
+        if echo "$push_out" | grep -qiE 'push access denied|access denied|denied'; then
+            runtime_print_registry_auth_help "$host" "$registry" "no_push_access"
+            runtime_img_msg error "推送探测输出:"
+            echo "$push_out" | while IFS= read -r line; do runtime_img_msg error "  $line"; done
+            return 1
+        fi
+        runtime_img_msg error "推送权限探测失败（未知错误）:"
+        echo "$push_out" | while IFS= read -r line; do runtime_img_msg error "  $line"; done
+        return 1
+    fi
+
+    runtime_img_msg ok "CNB 仓库登录与推送权限验证通过"
+    export EASYAIOT_REGISTRY_AUTH_VERIFIED=1
+    return 0
+}
+
 # 交互选择部署形态（默认 full）；非交互时使用环境变量或 full
 runtime_interactive_select_profile() {
     local purpose="${1:-pull}"
@@ -220,13 +379,14 @@ runtime_images_prepare_pull_interactive() {
 # build-runtime 前交互配置
 runtime_images_prepare_build_interactive() {
     runtime_log_registry_info
+    runtime_load_registry
+    export EASYAIOT_RUNTIME_REGISTRY="$RUNTIME_IMAGE_REGISTRY"
+    export REGISTRY="$RUNTIME_IMAGE_REGISTRY"
+    runtime_verify_registry_push_access "$RUNTIME_IMAGE_REGISTRY" || exit 1
     runtime_interactive_select_profile build
     runtime_interactive_select_tag
     runtime_interactive_confirm_push
     runtime_interactive_confirm_force_rebuild
-    runtime_load_registry
-    export EASYAIOT_RUNTIME_REGISTRY="$RUNTIME_IMAGE_REGISTRY"
-    export REGISTRY="$RUNTIME_IMAGE_REGISTRY"
 }
 
 # 将交互/环境变量导出给 runtime_image.sh 子进程
@@ -474,6 +634,11 @@ runtime_images_usage() {
   EASYAIOT_RUNTIME_PUSH=1      构建后推送（仅 build-runtime）
   EASYAIOT_RUNTIME_BUILD_ALL_PROFILES=1  构建全部形态（仅 build-runtime）
   EASYAIOT_RUNTIME_FORCE_REBUILD=1       强制重建
+  EASYAIOT_SKIP_REGISTRY_AUTH_CHECK=1     跳过 build-runtime 前的 CNB 登录/推送权限检查
+
+build-runtime 会在构建开始前校验 CNB 登录与推送权限；未登录请先执行:
+  docker login docker.cnb.cool -u cnb -p \${CNB_TOKEN}
+  详见 https://docs.cnb.cool/zh/artifact/docker.html
 
 也可直接调用 runtime_image.sh（支持命令行参数，适合 CI）:
   bash .scripts/docker/runtime_image.sh pull

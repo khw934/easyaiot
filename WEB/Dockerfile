@@ -38,6 +38,7 @@ RUN --mount=type=cache,target=/pnpm/store,id=web-pnpm-store \
 RUN --mount=type=cache,target=/pnpm/store,id=web-pnpm-store \
     pnpm config set store-dir /pnpm/store && \
     pnpm install --frozen-lockfile 2>&1 | tee /tmp/web-build-logs/pnpm-install.log && \
+    echo "=== pnpm install 完成，校验 cross-env ===" && \
     test -x node_modules/.bin/cross-env || (echo "=== pnpm install 未生成 node_modules/.bin/cross-env ===" && exit 1)
 
 # 源码变更或 install_linux.sh clean 后通过 CACHE_BUST 使后续层失效（避免命中 CACHED 跳过 pnpm build）

@@ -788,6 +788,12 @@ build_all_modules() {
 
     check_docker
 
+    # ★ 构建前先校验 CNB 登录与推送权限，避免长时间编译后推送失败
+    if ! runtime_verify_registry_push_access "$REGISTRY"; then
+        exit 1
+    fi
+    echo ""
+
     # ========================================================================
     # 阶段 0：宿主机本机编译（install_linux.sh build）
     # ========================================================================
