@@ -214,6 +214,9 @@ public class MessageTemplateController extends BaseController {
                     template.put("btnTxt", wxCp.getBtnTxt());
                     template.put("previewUser", wxCp.getPreviewUser());
                     template.put("userGroupId", wxCp.getUserGroupId());
+                    template.put("radioType", wxCp.getRadioType());
+                    template.put("webHook", wxCp.getWebHook());
+                    template.put("cpMsgType", wxCp.getCpMsgType());
                     break;
                 case 5:
                     // HTTP类型：查询TMsgHttp
@@ -248,6 +251,10 @@ public class MessageTemplateController extends BaseController {
                     template.put("url", ding.getUrl());
                     template.put("previewUser", ding.getPreviewUser());
                     template.put("userGroupId", ding.getUserGroupId());
+                    template.put("radioType", ding.getRadioType());
+                    template.put("webHook", ding.getWebHook());
+                    template.put("dingMsgType", ding.getDingMsgType());
+                    template.put("agentId", ding.getAgentId());
                     break;
                 case 7:
                     // 飞书类型：查询TMsgFeishu
@@ -266,6 +273,9 @@ public class MessageTemplateController extends BaseController {
                     template.put("url", feishu.getUrl());
                     template.put("previewUser", feishu.getPreviewUser());
                     template.put("userGroupId", feishu.getUserGroupId());
+                    template.put("radioType", feishu.getRadioType());
+                    template.put("webHook", feishu.getWebHook());
+                    template.put("feishuMsgType", feishu.getFeishuMsgType());
                     break;
                 default:
                     return AjaxResult.error("不支持的消息类型: " + msgType);

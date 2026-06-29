@@ -39,6 +39,12 @@ public class TMsgWxCp implements Serializable {
 
     private String userGroupName;
 
+    /** 通知方式：工作通知方式 / 群机器人消息 */
+    private String radioType;
+
+    /** 企业微信群机器人 Webhook 地址 */
+    private String webHook;
+
     private static final long serialVersionUID = 1L;
 
     public String getId() {

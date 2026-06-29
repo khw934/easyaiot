@@ -129,7 +129,104 @@ def _has_library_matching_scope(library_ids) -> bool:
 
 
 def _has_userless_channel(channels: List[Dict]) -> bool:
-    return any((ch.get('method') or '').lower() in _USERLESS_NOTIFY_METHODS for ch in (channels or []))
+    return any(_is_userless_channel(ch) for ch in (channels or []))
+
+
+def _is_userless_channel(channel: Dict) -> bool:
+    if not channel:
+        return False
+    if channel.get('userless'):
+        return True
+    method = (channel.get('method') or '').lower()
+    if method in _USERLESS_NOTIFY_METHODS:
+        return True
+    return False
+
+
+def _enrich_channels_userless_flags(channels: List[Dict]) -> List[Dict]:
+    """为无需通知人的渠道（HTTP/Webhook、企业微信/钉钉/飞书群机器人）标记 userless。"""
+    if not channels:
+        return channels
+
+    enriched = []
+    for channel in channels:
+        ch = dict(channel)
+        method = (ch.get('method') or '').lower()
+        if _is_userless_channel(ch):
+            ch['userless'] = True
+            enriched.append(ch)
+            continue
+
+        if method in ('wxcp', 'wechat', 'weixin') and ch.get('template_id'):
+            template_meta = _fetch_message_template_meta(method, ch.get('template_id'))
+            if template_meta and (
+                template_meta.get('radioType') == '群机器人消息'
+                or template_meta.get('webHook')
+            ):
+                ch['userless'] = True
+        elif method in ('ding', 'dingtalk') and ch.get('template_id'):
+            template_meta = _fetch_message_template_meta(method, ch.get('template_id'))
+            if template_meta and (
+                template_meta.get('radioType') == '群机器人消息'
+                or template_meta.get('webHook')
+            ):
+                ch['userless'] = True
+        elif method in ('feishu', 'lark') and ch.get('template_id'):
+            template_meta = _fetch_message_template_meta(method, ch.get('template_id'))
+            if template_meta and (
+                template_meta.get('radioType') == '群机器人消息'
+                or template_meta.get('webHook')
+            ):
+                ch['userless'] = True
+        enriched.append(ch)
+    return enriched
+
+
+def _fetch_message_template_meta(method: str, template_id) -> Optional[Dict]:
+    """查询消息模板元数据，用于判断企业微信群机器人等免通知人渠道。"""
+    if not template_id:
+        return None
+    try:
+        import os
+        import requests
+
+        method_to_msg_type = {
+            'wxcp': 4, 'wechat': 4, 'weixin': 4,
+            'http': 5, 'webhook': 5,
+            'ding': 6, 'dingtalk': 6,
+            'feishu': 7, 'lark': 7,
+        }
+        msg_type = method_to_msg_type.get((method or '').lower())
+        if not msg_type:
+            return None
+
+        try:
+            from flask import current_app
+            message_service_url = current_app.config.get('MESSAGE_SERVICE_URL', 'http://localhost:48080')
+            jwt_token = current_app.config.get('JWT_TOKEN', os.getenv('JWT_TOKEN', ''))
+        except RuntimeError:
+            message_service_url = os.getenv('MESSAGE_SERVICE_URL', 'http://localhost:48080')
+            jwt_token = os.getenv('JWT_TOKEN', '')
+
+        headers = {}
+        if jwt_token:
+            headers['Authorization'] = f'Bearer {jwt_token}'
+
+        response = requests.get(
+            f"{message_service_url}/admin-api/message/template/get",
+            params={'id': template_id, 'msgType': msg_type},
+            headers=headers,
+            timeout=5,
+        )
+        if response.status_code != 200:
+            return None
+        result = response.json()
+        if result.get('code') == 0 or result.get('success'):
+            data = result.get('data') or result
+            return data if isinstance(data, dict) else None
+    except Exception as e:
+        logger.debug(f"查询消息模板元数据失败: method={method}, template_id={template_id}, error={e}")
+    return None
 
 
 def _normalize_alert_interval_fields(
@@ -216,6 +313,8 @@ def _extract_notify_users_from_templates(channels: List[Dict]) -> List[Dict]:
         
         for channel in channels:
             method = channel.get('method', '').lower()
+            if _is_userless_channel(channel):
+                continue
             template_id = channel.get('template_id')
             
             if not template_id:
@@ -671,6 +770,9 @@ def create_algorithm_task(task_name: str,
             # 确保config_dict是字典
             if isinstance(config_dict, dict):
                 channels = config_dict.get('channels', [])
+                if channels:
+                    channels = _enrich_channels_userless_flags(channels)
+                    config_dict['channels'] = channels
                 logger.info(f"开始处理告警通知配置: channels数量={len(channels) if channels else 0}")
                 if channels:
                     # 从消息模板中提取通知人信息
@@ -689,7 +791,7 @@ def create_algorithm_task(task_name: str,
                     else:
                         if _has_userless_channel(channels):
                             logger.info(
-                                "ℹ️  包含 HTTP/Webhook 渠道，无需从模板提取通知人（URL 在消息模板中）"
+                                "ℹ️  包含 HTTP/Webhook 或企业微信群机器人渠道，无需从模板提取通知人（URL 在消息模板中）"
                             )
                         else:
                             logger.warning(
@@ -1018,6 +1120,9 @@ def update_algorithm_task(task_id: int, **kwargs) -> AlgorithmTask:
             # 确保config_dict是字典
             if isinstance(config_dict, dict):
                 channels = config_dict.get('channels', [])
+                if channels:
+                    channels = _enrich_channels_userless_flags(channels)
+                    config_dict['channels'] = channels
                 logger.info(f"开始处理告警通知配置（更新）: channels数量={len(channels) if channels else 0}")
                 if channels:
                     # 从消息模板中提取通知人信息
@@ -1036,7 +1141,7 @@ def update_algorithm_task(task_id: int, **kwargs) -> AlgorithmTask:
                     else:
                         if _has_userless_channel(channels):
                             logger.info(
-                                "ℹ️  包含 HTTP/Webhook 渠道，无需从模板提取通知人（URL 在消息模板中）（更新）"
+                                "ℹ️  包含 HTTP/Webhook 或企业微信群机器人渠道，无需从模板提取通知人（URL 在消息模板中）（更新）"
                             )
                         else:
                             logger.warning(

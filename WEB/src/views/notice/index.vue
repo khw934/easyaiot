@@ -80,7 +80,7 @@
               <TabPane key="2" tab="短信">
                 <sms/>
               </TabPane>
-              <TabPane key="3" tab="微信">
+              <TabPane key="3" tab="企业微信">
                 <wechat/>
               </TabPane>
               <TabPane key="4" tab="钉钉">
@@ -109,7 +109,7 @@
               <TabPane key="1" tab="短信">
                 <History :msgType="state.historyActiveKey"/>
               </TabPane>
-              <TabPane key="4" tab="微信">
+              <TabPane key="4" tab="企业微信">
                 <History :msgType="state.historyActiveKey"/>
               </TabPane>
               <TabPane key="6" tab="钉钉">

@@ -73,7 +73,7 @@
         rules = { validator: (_rule, val) => validator(val, 'email', subLabel) };
         break;
       case 4:
-        subLabel = '请输入微信号';
+        subLabel = '请输入企业微信成员 UserID';
         rules = { validator: (_rule, val) => validator(val, 'text', subLabel) };
         break;
       case 5:

@@ -49,16 +49,10 @@ public class DingMsgMaker extends BaseMsgMaker implements IMsgMaker {
     public void prepare() {
         String agentIdBefore = agentId;
         String agentIdNow = "";
-
-        String webHookBefore = webHook;
-        String webHookNow = "";
         synchronized (this) {
             if (agentIdBefore == null || !agentIdBefore.equals(agentIdNow)) {
                 agentId = agentIdNow;
                 DingMsgSender.accessTokenTimedCache = null;
-            }
-            if (webHookBefore == null || !webHookBefore.equals(webHookNow)) {
-                DingMsgSender.robotClient = null;
             }
         }
         msgType = "";

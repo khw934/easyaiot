@@ -46,7 +46,9 @@ import java.util.Map;
 @Slf4j
 @Component
 public class DingMsgSender implements IMsgSender {
-    public volatile static DefaultDingTalkClient robotClient;
+    private static final String DING_WORK_TYPE = "工作通知方式";
+    private static final String DING_ROBOT_TYPE = "群机器人消息";
+
     public static TimedCache<String, String> accessTokenTimedCache;
 
     @Autowired
@@ -68,11 +70,41 @@ public class DingMsgSender implements IMsgSender {
     public SendResult send(String msgId) {
         log.info("钉钉发送开始 params is:"+msgId);
         TMsgDing tMsgDing = tMsgDingMapper.selectByPrimaryKey(msgId);
-        if ("work".equals(tMsgDing.getRadioType())) {
-            return sendWorkMsg(msgId);
-        } else {
-            return sendRobotMsg(msgId);
+        if (tMsgDing == null) {
+            SendResult sendResult = new SendResult();
+            sendResult.setSuccess(false);
+            sendResult.setInfo("钉钉消息不存在: " + msgId);
+            return sendResult;
         }
+        if (isWorkMessage(tMsgDing)) {
+            return sendWorkMsg(msgId);
+        }
+        return sendRobotMsg(msgId);
+    }
+
+    public static boolean isRobotMessage(TMsgDing template) {
+        if (template == null) {
+            return false;
+        }
+        if (StringUtils.isNotBlank(template.getWebHook())) {
+            return true;
+        }
+        String radioType = template.getRadioType();
+        if ("robot".equalsIgnoreCase(radioType)) {
+            return true;
+        }
+        return DING_ROBOT_TYPE.equals(radioType);
+    }
+
+    public static boolean isWorkMessage(TMsgDing template) {
+        if (template == null) {
+            return false;
+        }
+        if (isRobotMessage(template)) {
+            return false;
+        }
+        String radioType = template.getRadioType();
+        return "work".equalsIgnoreCase(radioType) || DING_WORK_TYPE.equals(radioType);
     }
 
     public SendResult sendWorkMsg(String msgId) {
@@ -122,11 +154,33 @@ public class DingMsgSender implements IMsgSender {
     }
 
     public SendResult sendRobotMsg(String msgId) {
+        try {
+            TMsgDing dingMsg = dingMsgMaker.makeMsg(msgId);
+            return sendRobotMsg(dingMsg);
+        } catch (Exception e) {
+            SendResult sendResult = new SendResult();
+            sendResult.setSuccess(false);
+            sendResult.setInfo(e.getMessage());
+            log.error(e.toString());
+            return sendResult;
+        }
+    }
+
+    public SendResult sendRobotMsg(TMsgDing dingMsg) {
         SendResult sendResult = new SendResult();
 
         try {
-            TMsgDing dingMsg = dingMsgMaker.makeMsg(msgId);
-            DingTalkClient client = getRobotClient(dingMsg);
+            if (dingMsg == null) {
+                sendResult.setSuccess(false);
+                sendResult.setInfo("钉钉消息不能为空");
+                return sendResult;
+            }
+            if (StringUtils.isBlank(dingMsg.getWebHook())) {
+                sendResult.setSuccess(false);
+                sendResult.setInfo("钉钉群机器人 Webhook 地址不能为空");
+                return sendResult;
+            }
+            DingTalkClient client = new DefaultDingTalkClient(dingMsg.getWebHook());
             OapiRobotSendRequest request2 = new OapiRobotSendRequest();
 
             sendResult.setMsgName(dingMsg.getMsgName());
@@ -232,17 +286,6 @@ public class DingMsgSender implements IMsgSender {
             }
         }
         return defaultDingTalkClient;
-    }
-
-    public DefaultDingTalkClient getRobotClient(TMsgDing tMsgDing) {
-        if (robotClient == null) {
-            synchronized (PushControl.class) {
-                if (robotClient == null) {
-                    robotClient = new DefaultDingTalkClient(tMsgDing.getWebHook());
-                }
-            }
-        }
-        return robotClient;
     }
 
     public TimedCache<String, String> getAccessTokenTimedCache() {

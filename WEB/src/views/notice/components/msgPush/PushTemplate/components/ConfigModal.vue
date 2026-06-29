@@ -4,7 +4,7 @@
     @register="registerModal"
     @cancel="handleCancel"
     @ok="handleOk"
-    width="900px"
+    width="1100px"
     :canFullscreen="false"
   >
     <div class="config-modal-box">
@@ -74,6 +74,7 @@
           </FormItemRest>
         </template>
       </BasicForm>
+      <Describe ref="describeRef" />
     </div>
   </BasicModal>
 </template>
@@ -94,6 +95,7 @@
     templateColumns,
   } from '../Data';
   import VariableDefinitions from './VariableDefinitions.vue';
+  import Describe from './Describe.vue';
   import {
     messagePrepareAdd,
     messagePrepareUpdate,
@@ -115,7 +117,17 @@
   const emits = defineEmits(['success']);
   const { createMessage } = useMessage();
   const httpParamsRef = ref(null);
+  const describeRef = ref(null);
   const opertionType = ref('add');
+
+  const DESCRIBE_TYPE_MAP: Record<string, string> = {
+    sms: 'sms',
+    email: 'email',
+    weixin: 'weixin',
+    http: 'webhook',
+    ding: 'ding',
+    feishu: 'feishu',
+  };
 
   const formData = ref({
     variableDefinitions: [],
@@ -204,6 +216,7 @@
       feishu: 7,
     };
     changeNoticeType(type);
+    describeRef.value?.setNoticeType(DESCRIBE_TYPE_MAP[type] || 'email');
     setTimeout(() => {
       setFieldsValue({
         msgType: msgType[type],
@@ -316,6 +329,15 @@
         const _msgType = +msgType;
         // msgType
         t_Msg.msgType = _msgType;
+        // 企业微信/钉钉：群机器人模式不需要用户分组
+        if ([4, 6, 7].includes(_msgType) && t_Msg.radioType === '群机器人消息') {
+          t_Msg.userGroupId = null;
+        }
+        // 前端 btnText 与后端 btnTxt 字段对齐
+        if (t_Msg.btnText !== undefined) {
+          t_Msg.btnTxt = t_Msg.btnText;
+          delete t_Msg.btnText;
+        }
         // edit
         if (opertionType.value == 'edit') {
           t_Msg.id = id;

@@ -14,6 +14,7 @@
     weixinDetailSchemas,
     dingDetailSchemas,
     httpDetailSchemas,
+    feishuDetailSchemas,
   } from '../Data.tsx';
   import { Spin } from 'ant-design-vue';
 
@@ -43,6 +44,7 @@
       4: weixinDetailSchemas,
       5: httpDetailSchemas,
       6: dingDetailSchemas,
+      7: feishuDetailSchemas,
     };
     const descSchema = config[msgType] || commonDetailSchema;
     const descData = {};

@@ -22,11 +22,27 @@ export const formSchemas = ({ isVariable }) => {
     {
       field: 'userGroupId',
       component: 'Input',
-      required: true,
       label: '用户分组',
       slot: 'userGroupId',
+      dynamicRules: ({ values }) => {
+        const msgType = String(values?.msgType ?? '');
+        if (msgType === '5' || msgType === '7') {
+          return [];
+        }
+        if (values?.radioType === '群机器人消息') {
+          return [];
+        }
+        return [{ required: true, message: '请选择用户分组', trigger: ['change', 'blur'] }];
+      },
       ifShow: ({ values }) => {
-        return values?.msgType != '5';
+        const msgType = String(values?.msgType ?? '');
+        if (msgType === '5' || msgType === '7') {
+          return false;
+        }
+        if (values?.radioType === '群机器人消息') {
+          return false;
+        }
+        return true;
       },
     },
     {
@@ -241,7 +257,8 @@ const commonConfigFileds = [
       return (
         [values.cpMsgType, values.dingMsgType].includes('文本消息') ||
         ['链接消息', '卡片消息'].includes(values.dingMsgType) ||
-        [(values.cpMsgType, values.dingMsgType)].includes('markdown消息')
+        values.cpMsgType === 'markdown消息' ||
+        values.dingMsgType === 'markdown消息'
       );
     },
   },
@@ -265,12 +282,41 @@ export const weixinSchemas = () => {
         return renderProvider('img', corpMessage, '企业消息');
       },
     },
+    ...msgTypeFiled,
+    {
+      field: 'radioType',
+      component: 'RadioGroup',
+      label: '消息通知方式',
+      componentProps: {
+        options: [
+          { label: '工作通知方式', value: '工作通知方式' },
+          { label: '群机器人消息', value: '群机器人消息' },
+        ],
+      },
+      defaultValue: '工作通知方式',
+    },
     {
       field: 'agentId',
       component: 'Select',
       label: '应用',
       slot: 'agentId',
       required: true,
+      ifShow: ({ values }) => {
+        return values.radioType == '工作通知方式';
+      },
+    },
+    {
+      field: 'webHook',
+      component: 'Input',
+      label: 'Webhook地址',
+      required: true,
+      helpMessage: '在企业微信群中添加机器人后获取，群机器人模式无需用户分组',
+      componentProps: {
+        placeholder: 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...',
+      },
+      ifShow: ({ values }) => {
+        return values.radioType == '群机器人消息';
+      },
     },
     {
       field: 'cpMsgType',
@@ -284,6 +330,7 @@ export const weixinSchemas = () => {
           { value: 'markdown消息', label: 'markdown消息' },
         ],
       },
+      defaultValue: '文本消息',
     },
     ...commonConfigFileds,
   ];
@@ -316,7 +363,9 @@ export const dindinSchemas = () => {
     {
       field: 'webHook',
       component: 'Input',
-      label: 'webHook',
+      label: 'Webhook地址',
+      required: true,
+      helpMessage: '在钉钉群中添加自定义机器人后获取',
       ifShow: ({ values }) => {
         return values.radioType == '群机器人消息';
       },
@@ -365,6 +414,10 @@ export const feishuSchemas = () => {
       component: 'Input',
       label: 'Webhook地址',
       required: true,
+      helpMessage: '在飞书群中添加自定义机器人后获取，无需用户分组',
+      componentProps: {
+        placeholder: 'https://open.feishu.cn/open-apis/bot/v2/hook/...',
+      },
       ifShow: ({ values }) => {
         return values.radioType == '群机器人消息';
       },
@@ -544,12 +597,26 @@ export const smsDetailSchemas = [
 export const weixinDetailSchemas = [
   ...commonDetailSchema,
   {
+    field: 'radioType',
+    label: '通知方式',
+  },
+  {
     field: 'cpMsgType',
     label: '消息类型',
   },
   {
     field: 'agentId',
     label: '应用',
+    show: (data) => {
+      return data?.radioType == '工作通知方式';
+    },
+  },
+  {
+    field: 'webHook',
+    label: 'Webhook地址',
+    show: (data) => {
+      return data?.radioType == '群机器人消息';
+    },
   },
   {
     field: 'title',
@@ -587,14 +654,14 @@ export const dingDetailSchemas = [
     field: 'agentId',
     label: '应用',
     show: (data) => {
-      return data?.dingMsgType == '工作通知方式';
+      return data?.radioType == '工作通知方式';
     },
   },
   {
     field: 'webHook',
-    label: 'webHook',
+    label: 'Webhook地址',
     show: (data) => {
-      return data?.dingMsgType == '群机器人消息';
+      return data?.radioType == '群机器人消息';
     },
   },
   {
@@ -633,6 +700,28 @@ export const httpDetailSchemas = [
   {
     field: 'url',
     label: 'URL',
+    span: 3,
+  },
+];
+
+export const feishuDetailSchemas = [
+  ...commonDetailSchema,
+  {
+    field: 'radioType',
+    label: '通知方式',
+  },
+  {
+    field: 'feishuMsgType',
+    label: '消息类型',
+  },
+  {
+    field: 'webHook',
+    label: 'Webhook地址',
+    span: 3,
+  },
+  {
+    field: 'content',
+    label: '内容',
     span: 3,
   },
 ];

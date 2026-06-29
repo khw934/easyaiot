@@ -54,35 +54,44 @@
       </div>
       <div v-if="noticeType == 'weixin'">
         <div class="link">企业微信管理后台：https://work.weixin.qq.com</div>
-        <TypographyTitle :level="5">1. 概述</TypographyTitle>
+        <TypographyTitle :level="5">1. 两种通知方式</TypographyTitle>
         <TypographyParagraph>
-          通知模板结合通知配置为告警消息通知提供支撑。通知模板只能调用同一类型的通知配置服务。
+          <strong>群机器人消息</strong>：填写 Webhook 即可推送到群，无需消息配置和用户分组，适合告警通知。<br />
+          <strong>工作通知方式</strong>：需先在「消息配置」填写 corpId 与应用 Secret，并在「用户管理」维护成员 UserID、创建用户分组。
         </TypographyParagraph>
-        <TypographyTitle :level="5">2.模版配置说明</TypographyTitle>
+        <TypographyTitle :level="5">2. 群机器人配置</TypographyTitle>
         <TypographyParagraph>
-          1、绑定配置<br />
-          使用固定的通知配置发送此通知模板<br />
-          2、Agentid<br />
-          应用唯一标识<br />
-          获取路径：“企业微信”管理后台--“应用管理”--“应用”--“查看应用”<br />
+          1、在企业微信群中添加群机器人，复制 Webhook 地址<br />
+          2、消息内容支持变量：${device_name}、${event}、${time}、${object} 等<br />
+          3、保存后可点「测试发送」验证
+        </TypographyParagraph>
+        <TypographyTitle :level="5">3. 工作通知配置</TypographyTitle>
+        <TypographyParagraph>
+          1、选择应用 AgentId（与消息配置中的应用一致）<br />
+          2、选择用户分组（分组内用户须填写企业微信成员 UserID）<br />
+          3、AgentId 获取路径：管理后台 → 应用管理 → 应用 → 查看 AgentId
         </TypographyParagraph>
         <TypographyParagraph>
           <img :src="Agentid" width="487" @click="handlePreviewImage(Agentid)" />
         </TypographyParagraph>
         <TypographyParagraph>
-          3、收信人ID、收信部门ID、标签推送<br />
-          接收通知的3种方式，3个字段若在此页面都没有填写，则在模板调试和配置告警通知时需要手动填写<br />
-          收信人ID获取路径：【通讯录】->【成员信息】查看成员账号<br />
-          收信组织ID获取路径：【通讯录】->【部门信息】查看部门ID<br />
+          成员 UserID 获取路径：管理后台 → 通讯录 → 成员详情
         </TypographyParagraph>
         <TypographyParagraph>
           <img :src="userID" width="487" @click="handlePreviewImage(userID)" />
         </TypographyParagraph>
+      </div>
+      <div v-if="noticeType == 'ding'">
+        <TypographyTitle :level="5">钉钉推送说明</TypographyTitle>
         <TypographyParagraph>
-          <img :src="toDept" width="487" @click="handlePreviewImage(toDept)" />
+          群机器人：填写 Webhook，无需用户分组。<br />
+          工作通知：需配置消息配置中的应用，并选择用户分组。
         </TypographyParagraph>
+      </div>
+      <div v-if="noticeType == 'feishu'">
+        <TypographyTitle :level="5">飞书群机器人</TypographyTitle>
         <TypographyParagraph>
-          <img :src="toTags" width="487" @click="handlePreviewImage(toTags)" />
+          填写飞书群机器人 Webhook 地址与消息内容即可，无需用户分组。
         </TypographyParagraph>
       </div>
       <div v-if="noticeType == 'webhook'">
@@ -106,8 +115,6 @@
   import { createImgPreview } from '/@/components/Preview/index';
   import Agentid from '@/assets/images/Agentid.jpg';
   import userID from '@/assets/images/userID.jpg';
-  import toDept from '@/assets/images/toDept.jpg';
-  import toTags from '@/assets/images/toTags.jpg';
 
   const noticeType = ref('email');
 

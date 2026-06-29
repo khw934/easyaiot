@@ -2,10 +2,10 @@
 -- PostgreSQL database dump
 --
 
-\restrict fZCIMJ7YUAJZdjJWBs0ZadWJBe6KODBYATxobaCnaCKZbrSM1W5SnGMQELjs81N
+\restrict phdyrxcKEHJLcxjdUnKvLjwL6nZ0II530O82WY1yXm6e4qaCWpeZB02jn3gnDA3
 
--- Dumped from database version 18.1 (Debian 18.1-1.pgdg13+2)
--- Dumped by pg_dump version 18.1 (Debian 18.1-1.pgdg13+2)
+-- Dumped from database version 18.4 (Debian 18.4-1.pgdg13+1)
+-- Dumped by pg_dump version 18.4 (Debian 18.4-1.pgdg13+1)
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -27,10 +27,10 @@ DROP DATABASE IF EXISTS "iot-message20";
 CREATE DATABASE "iot-message20" WITH TEMPLATE = template0 ENCODING = 'UTF8' LOCALE_PROVIDER = libc LOCALE = 'en_US.utf8';
 
 
-\unrestrict fZCIMJ7YUAJZdjJWBs0ZadWJBe6KODBYATxobaCnaCKZbrSM1W5SnGMQELjs81N
+\unrestrict phdyrxcKEHJLcxjdUnKvLjwL6nZ0II530O82WY1yXm6e4qaCWpeZB02jn3gnDA3
 \encoding SQL_ASCII
 \connect -reuse-previous=on "dbname='iot-message20'"
-\restrict fZCIMJ7YUAJZdjJWBs0ZadWJBe6KODBYATxobaCnaCKZbrSM1W5SnGMQELjs81N
+\restrict phdyrxcKEHJLcxjdUnKvLjwL6nZ0II530O82WY1yXm6e4qaCWpeZB02jn3gnDA3
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -623,7 +623,9 @@ CREATE TABLE public.t_msg_wx_cp (
     preview_user character varying(1000),
     user_group_id character varying(64),
     tenant_id bigint DEFAULT 0 NOT NULL,
-    deleted smallint DEFAULT 0 NOT NULL
+    deleted smallint DEFAULT 0 NOT NULL,
+    radio_type character varying(64),
+    web_hook character varying(512)
 );
 
 
@@ -639,6 +641,20 @@ COMMENT ON COLUMN public.t_msg_wx_cp.tenant_id IS '租户编号';
 --
 
 COMMENT ON COLUMN public.t_msg_wx_cp.deleted IS '是否删除';
+
+
+--
+-- Name: COLUMN t_msg_wx_cp.radio_type; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.t_msg_wx_cp.radio_type IS '通知方式：工作通知方式 / 群机器人消息';
+
+
+--
+-- Name: COLUMN t_msg_wx_cp.web_hook; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.t_msg_wx_cp.web_hook IS '企业微信群机器人 Webhook 地址';
 
 
 --
@@ -1066,7 +1082,7 @@ COPY public.t_msg_sms (id, msg_type, msg_name, template_id, content, create_time
 -- Data for Name: t_msg_wx_cp; Type: TABLE DATA; Schema: public; Owner: -
 --
 
-COPY public.t_msg_wx_cp (id, msg_type, msg_name, cp_msg_type, agent_id, content, title, img_url, describe, url, btn_txt, create_time, modified_time, preview_user, user_group_id, tenant_id, deleted) FROM stdin;
+COPY public.t_msg_wx_cp (id, msg_type, msg_name, cp_msg_type, agent_id, content, title, img_url, describe, url, btn_txt, create_time, modified_time, preview_user, user_group_id, tenant_id, deleted, radio_type, web_hook) FROM stdin;
 \.
 
 
@@ -1362,5 +1378,5 @@ ALTER TABLE ONLY public.t_msg_kefu
 -- PostgreSQL database dump complete
 --
 
-\unrestrict fZCIMJ7YUAJZdjJWBs0ZadWJBe6KODBYATxobaCnaCKZbrSM1W5SnGMQELjs81N
+\unrestrict phdyrxcKEHJLcxjdUnKvLjwL6nZ0II530O82WY1yXm6e4qaCWpeZB02jn3gnDA3
 
