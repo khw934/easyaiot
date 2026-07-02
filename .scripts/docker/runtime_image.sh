@@ -1218,35 +1218,86 @@ build_all_modules() {
         return 1
     fi
 
-    # 列出本地镜像
+    print_local_runtime_image_list build "${build_profiles[@]}"
+    return 0
+}
+
+# ============================================================================
+# 本地镜像列表（build / pull 共用）
+# ============================================================================
+
+_print_local_image_line() {
+    local lref="$1"
+    [ -z "$lref" ] && return 0
+    if docker image inspect "$lref" >/dev/null 2>&1; then
+        local size
+        size=$(docker image inspect "$lref" --format '{{.Size}}' 2>/dev/null | awk '{printf "%.1f MB", $1/1024/1024}')
+        echo "  ${lref}  (${size:-N/A})"
+    fi
+}
+
+_append_unique_ref() {
+    local ref="$1"
+    local -n _refs=$2
+    local existing
+    [ -z "$ref" ] && return 0
+    for existing in "${_refs[@]}"; do
+        [ "$existing" = "$ref" ] && return 0
+    done
+    _refs+=("$ref")
+}
+
+print_local_runtime_image_list() {
+    local mode="$1"
+    shift
+
     echo ""
     print_info "本地运行时镜像列表 (${CURRENT_ARCH}):"
+
     for mapping in "${INDEPENDENT_MODULES[@]}"; do
-        local rname="${mapping%%|*}"; local tmp="${mapping#*|}"; local lname="${tmp%%|*}"
-        for lref in "$(local_ref "$lname")" "$(for p in "${build_profiles[@]}"; do is_profile_dependent "$rname" && local_ref "$lname" "$p" || true; done)"; do
-            [ -z "$lref" ] && continue
-            if docker image inspect "$lref" >/dev/null 2>&1; then
-                local size; size=$(docker image inspect "$lref" --format '{{.Size}}' 2>/dev/null | awk '{printf "%.1f MB", $1/1024/1024}')
-                echo "  ${lref}  (${size:-N/A})"
+        local rname="${mapping%%|*}"
+        local tmp="${mapping#*|}"
+        local lname="${tmp%%|*}"
+        local -a lrefs=()
+        _append_unique_ref "$(local_ref "$lname")" lrefs
+        if is_profile_dependent "$rname"; then
+            if [ "$mode" = build ]; then
+                local p
+                for p in "$@"; do
+                    _append_unique_ref "$(local_ref "$lname" "$p")" lrefs
+                done
+            else
+                _append_unique_ref "$(local_ref "$lname" "$1")" lrefs
             fi
+        fi
+        local lref
+        for lref in "${lrefs[@]}"; do
+            _print_local_image_line "$lref"
         done
     done
-    for lname in "${DEVICE_LOCAL_NAMES[@]}"; do
-        local lref; lref=$(local_ref "$lname")
-        if docker image inspect "$lref" >/dev/null 2>&1; then
-            local size; size=$(docker image inspect "$lref" --format '{{.Size}}' 2>/dev/null | awk '{printf "%.1f MB", $1/1024/1024}')
-            echo "  ${lref}  (${size:-N/A})"
+
+    if [ "$mode" = pull ]; then
+        local pull_profile="$1" i tmp lname
+        for i in "${!DEVICE_LOCAL_NAMES[@]}"; do
+            runtime_device_image_needed_for_pull "$i" "$pull_profile" || continue
+            _print_local_image_line "$(local_ref "${DEVICE_LOCAL_NAMES[$i]}")"
+        done
+        if [ "$pull_profile" = "full" ]; then
+            for mapping in "${FULL_ONLY_MODULES[@]}"; do
+                tmp="${mapping#*|}"; lname="${tmp%%|*}"
+                _print_local_image_line "$(local_ref "$lname")"
+            done
         fi
-    done
-    for mapping in "${FULL_ONLY_MODULES[@]}"; do
-        local tmp="${mapping#*|}"; local lname="${tmp%%|*}"
-        local lref; lref=$(local_ref "$lname")
-        if docker image inspect "$lref" >/dev/null 2>&1; then
-            local size; size=$(docker image inspect "$lref" --format '{{.Size}}' 2>/dev/null | awk '{printf "%.1f MB", $1/1024/1024}')
-            echo "  ${lref}  (${size:-N/A})"
-        fi
-    done
-    return 0
+    else
+        local lname tmp
+        for lname in "${DEVICE_LOCAL_NAMES[@]}"; do
+            _print_local_image_line "$(local_ref "$lname")"
+        done
+        for mapping in "${FULL_ONLY_MODULES[@]}"; do
+            tmp="${mapping#*|}"; lname="${tmp%%|*}"
+            _print_local_image_line "$(local_ref "$lname")"
+        done
+    fi
 }
 
 # ============================================================================
@@ -1465,38 +1516,7 @@ EOF
         return 1
     fi
 
-    # 列出本地镜像
-    echo ""
-    print_info "本地运行时镜像列表 (${CURRENT_ARCH}):"
-    for mapping in "${INDEPENDENT_MODULES[@]}"; do
-        local rname="${mapping%%|*}"; local tmp="${mapping#*|}"; local lname="${tmp%%|*}"
-        for lref in "$(local_ref "$lname")" "$(is_profile_dependent "$rname" && local_ref "$lname" "$pull_profile" || true)"; do
-            [ -z "$lref" ] && continue
-            if docker image inspect "$lref" >/dev/null 2>&1; then
-                local size; size=$(docker image inspect "$lref" --format '{{.Size}}' 2>/dev/null | awk '{printf "%.1f MB", $1/1024/1024}')
-                echo "  ${lref}  (${size:-N/A})"
-            fi
-        done
-    done
-    for i in "${!DEVICE_LOCAL_NAMES[@]}"; do
-        runtime_device_image_needed_for_pull "$i" "$pull_profile" || continue
-        local lname="${DEVICE_LOCAL_NAMES[$i]}"
-        local lref; lref=$(local_ref "$lname")
-        if docker image inspect "$lref" >/dev/null 2>&1; then
-            local size; size=$(docker image inspect "$lref" --format '{{.Size}}' 2>/dev/null | awk '{printf "%.1f MB", $1/1024/1024}')
-            echo "  ${lref}  (${size:-N/A})"
-        fi
-    done
-    if [ "$pull_profile" = "full" ]; then
-        for mapping in "${FULL_ONLY_MODULES[@]}"; do
-            local tmp="${mapping#*|}"; local lname="${tmp%%|*}"
-            local lref; lref=$(local_ref "$lname")
-            if docker image inspect "$lref" >/dev/null 2>&1; then
-                local size; size=$(docker image inspect "$lref" --format '{{.Size}}' 2>/dev/null | awk '{printf "%.1f MB", $1/1024/1024}')
-                echo "  ${lref}  (${size:-N/A})"
-            fi
-        done
-    fi
+    print_local_runtime_image_list pull "$pull_profile"
     return 0
 }
 
