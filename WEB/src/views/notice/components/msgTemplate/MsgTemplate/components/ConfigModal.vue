@@ -137,6 +137,7 @@
       validate,
       setFieldsValue,
       resetFields,
+      updateSchema,
     },
   ] = useForm({
     schemas: templateFormSchemas({ isVariable }),
@@ -168,6 +169,12 @@
 
   function handleNoticeType(type) {
     const msgType = { sms: 1, email: 3, weixin: 4, http: 5, ding: 6, feishu: 7 };
+    const usesTemplateTitle = ['weixin', 'ding', 'feishu'].includes(type);
+    updateSchema({
+      field: 'msgName',
+      label: usesTemplateTitle ? '模板标题' : '模板名称',
+      helpMessage: usesTemplateTitle ? '列表中展示的模板标识' : undefined,
+    });
     changeNoticeType(type);
     describeRef.value?.setNoticeType(DESCRIBE_TYPE_MAP[type] || 'email');
     setTimeout(() => {
@@ -207,6 +214,15 @@
     if (getFieldsValue().msgType == 5) httpParamsRef.value?.reset();
   };
 
+  /** 邮件/企微/钉钉/飞书模板以 title 作为唯一标识，与 msgName 双向补齐 */
+  function syncTemplateIdentity(t_Msg: Record<string, unknown>, msgType: number) {
+    if (![3, 4, 6, 7].includes(msgType)) return;
+    const name = String(t_Msg.msgName ?? '').trim();
+    const title = String(t_Msg.title ?? '').trim();
+    if (!title && name) t_Msg.title = name;
+    if (!name && title) t_Msg.msgName = title;
+  }
+
   const handleCancel = () => {
     resetFields();
     reset();
@@ -223,6 +239,7 @@
         const { id, msgType, ...t_Msg } = getFieldsValue();
         const _msgType = +msgType;
         t_Msg.msgType = _msgType;
+        syncTemplateIdentity(t_Msg, _msgType);
         if (t_Msg.btnText !== undefined) {
           t_Msg.btnTxt = t_Msg.btnText;
           delete t_Msg.btnText;
@@ -266,8 +283,7 @@
         closeModal();
         emits('success');
         handleCancel();
-      })
-      .catch(() => createMessage.error('操作失败'));
+      });
   };
 
   async function getUserGroupQueryByMsgType() {

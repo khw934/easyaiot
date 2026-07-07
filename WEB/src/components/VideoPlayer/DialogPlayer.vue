@@ -82,6 +82,7 @@
               :hasAudio="!!talkProtocol"
               :vodMode="state.vodMode"
               :fill-video="!state.vodMode"
+              :ai-with-fallback="!state.vodMode && !!state.fallbackUrl"
               @stream-error="handleStreamError"
             />
             <div v-else-if="state.playLoading" class="monitor-dialog__loading">
@@ -134,6 +135,7 @@ import {
   isAiStreamPlayUrl,
   pickDirectPlayUrls,
   resolveGbChannelPlayUrls,
+  schedulePendingAiStreamUpgrade,
 } from '@/views/camera/utils/devicePlay';
 import { isVodPlaybackUrl } from '@/utils/alertRecord';
 import {
@@ -179,6 +181,27 @@ function clearAiFallbackTimer() {
   }
 }
 
+function schedulePendingAiUpgrade(primaryUrl: string, pendingAiUrl: string) {
+  schedulePendingAiStreamUpgrade(
+    pendingAiUrl,
+    primaryUrl,
+    () => {
+      const ai = pendingAiUrl.trim();
+      return state.currentUrl === primaryUrl && state.currentUrl !== ai && !state.vodMode;
+    },
+    () => {
+      state.fallbackUrl = primaryUrl;
+      state.preferAi = false;
+      state.currentUrl = '';
+      void nextTick().then(() => {
+        state.currentUrl = pendingAiUrl.trim();
+        playerKey.value += 1;
+        triggerPlayerFillResize();
+      });
+    },
+  );
+}
+
 function scheduleAiFallback(primaryUrl: string) {
   clearAiFallbackTimer();
   const fb = state.fallbackUrl?.trim();
@@ -189,10 +212,7 @@ function scheduleAiFallback(primaryUrl: string) {
     if (state.currentUrl !== primaryUrl) return;
     if (jessibucaRef.value?.playing) return;
 
-    createMessage.warning(
-      'AI 流暂不可用（请确认算法任务已启动且 ZLM 已收到推流），已切换为原始画面（无检测框）',
-    );
-    switchToFallbackUrl(fb);
+    void switchToFallbackUrl(fb);
   }, AI_PLAY_FALLBACK_MS);
 }
 
@@ -210,7 +230,6 @@ function handleStreamError() {
   const fb = state.fallbackUrl?.trim();
   if (!fb || fb === state.currentUrl) return;
   clearAiFallbackTimer();
-  createMessage.warning('AI 流已中断，已切换为原始画面（无检测框）');
   void switchToFallbackUrl(fb);
 }
 
@@ -270,7 +289,12 @@ async function resolveLivePlayUrls(record: Record<string, any>) {
 
 async function applyResolvedStream(
   record: Record<string, any>,
-  resolved: { url: string | null; fallbackUrl?: string | null; preferAi?: boolean },
+  resolved: {
+    url: string | null;
+    fallbackUrl?: string | null;
+    preferAi?: boolean;
+    pendingAiUrl?: string | null;
+  },
 ) {
   if (!resolved.url) {
     createMessage.warning(
@@ -291,15 +315,23 @@ async function applyResolvedStream(
   state.currentUrl = resolved.url;
   playerKey.value += 1;
   scheduleAiFallback(resolved.url);
+  const pendingAi = resolved.pendingAiUrl?.trim();
+  if (pendingAi && pendingAi !== resolved.url) {
+    schedulePendingAiUpgrade(resolved.url, pendingAi);
+  }
   triggerPlayerFillResize();
 }
 
 function triggerPlayerFillResize() {
   const run = () => {
     const inst = jessibucaRef.value?.jessibuca;
-    if (!inst) return;
-    inst.setScaleMode?.(0);
-    inst.resize?.();
+    if (!inst || !jessibucaRef.value?.playing) return;
+    try {
+      inst.setScaleMode?.(0);
+      inst.resize?.();
+    } catch {
+      /* 播放器尚未就绪 */
+    }
   };
   nextTick(() => {
     requestAnimationFrame(run);
@@ -345,6 +377,7 @@ async function loadStream(record: Record<string, any>) {
   const preResolvedUrl = String(record.http_stream ?? '').trim();
   const recordFallback = String(record._fallbackUrl ?? '').trim() || null;
   const recordPreferAi = !!record._preferAi;
+  const recordPendingAi = String(record._pendingAiUrl ?? '').trim() || null;
 
   const gbIds = getGb28181PlayIds(record);
   const sipDeviceId = gbIds?.sipDeviceId ?? '';
@@ -368,6 +401,9 @@ async function loadStream(record: Record<string, any>) {
     if (preResolvedUrl) {
       playerKey.value += 1;
       scheduleAiFallback(preResolvedUrl);
+      if (recordPendingAi && recordPendingAi !== preResolvedUrl) {
+        schedulePendingAiUpgrade(preResolvedUrl, recordPendingAi);
+      }
       triggerPlayerFillResize();
     }
     return;

@@ -791,6 +791,20 @@ def _check_srs_api_ready(host: str, api_port: int, timeout: float = 3.0) -> bool
         return False
 
 
+def _srs_stream_path_key(stream: dict) -> str:
+    """从 SRS streams API 条目解析 app/stream 路径，如 live/device_id。"""
+    url = (stream.get('url') or '').strip().lstrip('/')
+    if url:
+        return url
+    stream_app = (stream.get('app') or '').strip()
+    stream_name = (stream.get('name') or '').strip()
+    if stream_name.endswith('.flv'):
+        stream_name = stream_name[:-4]
+    if stream_app and stream_name:
+        return f'{stream_app}/{stream_name}'
+    return stream_app
+
+
 def check_and_stop_existing_stream(stream_url: str) -> None:
     """推流前清理 SRS 上同路径的旧 publisher，避免 StreamBusy / Broken pipe。"""
     try:
@@ -811,11 +825,12 @@ def check_and_stop_existing_stream(stream_url: str) -> None:
             rtmp_host = '127.0.0.1'
 
         api_port = _srs_api_port()
-        srs_api_url = f'http://{rtmp_host}:{api_port}/api/v1/streams/'
+        srs_streams_base = f'http://{rtmp_host}:{api_port}/api/v1/streams/'
+        srs_streams_list_url = f'{srs_streams_base}?count=100'
         srs_clients_api_url = f'http://{rtmp_host}:{api_port}/api/v1/clients/'
         logger.info('检查现有流: %s', stream_path)
 
-        response = requests.get(srs_api_url, timeout=3)
+        response = requests.get(srs_streams_list_url, timeout=3)
         if response.status_code != 200:
             logger.warning('无法获取 SRS 流列表 (状态码: %s)，继续推流', response.status_code)
             return
@@ -830,10 +845,7 @@ def check_and_stop_existing_stream(stream_url: str) -> None:
 
         stream_to_stop = None
         for stream in stream_list:
-            stream_app = stream.get('app', '')
-            stream_stream = stream.get('stream', '')
-            full_stream_path = f'{stream_app}/{stream_stream}' if stream_stream else stream_app
-            if stream_path == full_stream_path:
+            if _srs_stream_path_key(stream) == stream_path:
                 stream_to_stop = stream
                 break
 
@@ -843,10 +855,11 @@ def check_and_stop_existing_stream(stream_url: str) -> None:
 
         stream_id = stream_to_stop.get('id', '')
         publish_info = stream_to_stop.get('publish', {})
+        publish_active = bool(publish_info.get('active')) if isinstance(publish_info, dict) else False
         publish_cid = publish_info.get('cid', '') if isinstance(publish_info, dict) else None
         logger.warning('发现现有流: %s (ID: %s)，正在清理...', stream_path, stream_id)
 
-        if publish_cid:
+        if publish_cid and publish_active:
             client_info_url = f'{srs_clients_api_url}{publish_cid}'
             try:
                 stop_response = requests.delete(client_info_url, timeout=3)
@@ -859,7 +872,7 @@ def check_and_stop_existing_stream(stream_url: str) -> None:
 
         if stream_id:
             try:
-                stop_response = requests.delete(f'{srs_api_url}{stream_id}', timeout=3)
+                stop_response = requests.delete(f'{srs_streams_base}{stream_id}', timeout=3)
                 if stop_response.status_code in (200, 204):
                     logger.info('已停止现有流: %s', stream_path)
                     time.sleep(1)

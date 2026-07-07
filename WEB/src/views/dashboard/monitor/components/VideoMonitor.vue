@@ -76,6 +76,9 @@
             :key="`player-${index}-${video.deviceId || video.url}`"
             :playUrl="video.url"
             :hasAudio="false"
+            :fill-video="true"
+            :multi-view="getMaxVideoCount(currentLayout) > 1"
+            :ai-with-fallback="!!video.fallbackUrl"
             :ref="el => setVideoRef(el, index)"
             class="video-player"
             @stream-error="handleStreamError(index)"
@@ -180,6 +183,7 @@ import {
   AI_PLAY_FALLBACK_MS,
   pickDirectPlayUrls,
   resolveGbChannelPlayUrls,
+  schedulePendingAiStreamUpgrade,
 } from '@/views/camera/utils/devicePlay'
 import { parseGbChannelKey } from '@/views/camera/utils/gb28181Tree'
 import type { MonitorTreeDeviceNode } from '@/api/device/camera'
@@ -218,7 +222,7 @@ const activeVideoIndex = ref(0)
 const dragSourceIndex = ref<number | null>(null)
 const dragOverIndex = ref<number | null>(null)
 const currentLayout = ref('1')
-/** 勾选后点播 AI 流（检测框由算法任务烧录在此路流上） */
+/** 勾选后点播 AI 流；默认开，先播 /live 原始流，AI 就绪后无感升级，失败则快速回退 */
 const enableAi = ref(true)
 const videoRefs = ref<(InstanceType<typeof Jessibuca> | null)[]>([])
 const alertRecordList = ref<any[]>([])
@@ -362,7 +366,7 @@ async function playSavedSlot(index: number, saved: MonitorLayoutSlot) {
   if (playId.startsWith('gb_ch_')) {
     const gb = parseGbChannelKey(playId)
     if (!gb) return
-    const { url, fallbackUrl, preferAi } = await resolveGbChannelPlayUrls(
+    const { url, fallbackUrl, preferAi, pendingAiUrl } = await resolveGbChannelPlayUrls(
       gb.sipDeviceId,
       gb.channelId,
       { enableAi: enableAi.value, synced: saved.device },
@@ -380,6 +384,7 @@ async function playSavedSlot(index: number, saved: MonitorLayoutSlot) {
       device: saved.device,
       fallbackUrl,
       preferAi,
+      pendingAiUrl,
     })
     return
   }
@@ -389,7 +394,7 @@ async function playSavedSlot(index: number, saved: MonitorLayoutSlot) {
     createMessage.warn(`方案恢复失败：${saved.name}（缺少设备信息）`)
     return
   }
-  const { url, fallbackUrl, preferAi } = await resolvePlayUrlsForDevice(dev)
+  const { url, fallbackUrl, preferAi, pendingAiUrl } = await resolvePlayUrlsForDevice(dev)
   if (!url) {
     createMessage.warn(`方案恢复失败：${saved.name}`)
     return
@@ -403,6 +408,7 @@ async function playSavedSlot(index: number, saved: MonitorLayoutSlot) {
     device: dev,
     fallbackUrl,
     preferAi,
+    pendingAiUrl,
   })
 }
 
@@ -435,12 +441,8 @@ async function activateLayoutPreset(presetId: number) {
   if (!preset) return
 
   videoRefs.value.forEach((ref) => {
-    if (ref?.jessibuca) {
-      try {
-        ref.destroy()
-      } catch {
-        /* ignore */
-      }
+    if (ref) {
+      ref._unmounting = true
     }
   })
   videoRefs.value = []
@@ -649,25 +651,12 @@ function createPlaceholderSlot(index: number) {
   }
 }
 
-function destroyPlayerAtIndex(index: number) {
-  clearAiFallbackTimer(index)
-  const jessibucaInstance = videoRefs.value[index]
-  if (!jessibucaInstance) return
-  try {
-    if (typeof jessibucaInstance.destroy === 'function' && jessibucaInstance.jessibuca) {
-      jessibucaInstance.destroy()
-    }
-  } catch (error) {
-    console.warn('销毁播放器实例时出错:', error)
-  }
-  videoRefs.value[index] = null
-}
-
 function removeVideoAtIndex(index: number) {
   if (!hasVideoContent(internalVideoList.value[index])) return
 
-  destroyPlayerAtIndex(index)
+  clearAiFallbackTimer(index)
   internalVideoList.value[index] = createPlaceholderSlot(index)
+  videoRefs.value[index] = null
   createMessage.success('已移除视频流')
 }
 
@@ -695,33 +684,14 @@ function handleDragLeave(index: number) {
   }
 }
 
-async function replayVideoAtIndex(index: number, retryCount = 0) {
-  const slot = internalVideoList.value[index]
-  if (!hasVideoContent(slot)) return
-
-  const jessibucaInstance = videoRefs.value[index]
-  if (jessibucaInstance?.play) {
-    try {
-      jessibucaInstance.play()
-    } catch (error) {
-      console.error('播放失败:', error)
-      createMessage.error('播放失败，请重试')
-    }
-    return
-  }
-  if (retryCount < 15) {
-    setTimeout(() => replayVideoAtIndex(index, retryCount + 1), 150)
-  }
-}
-
 async function swapVideoChannels(fromIndex: number, toIndex: number) {
   if (fromIndex === toIndex) return
 
+  clearAiFallbackTimer(fromIndex)
+  clearAiFallbackTimer(toIndex)
+
   const fromSlot = { ...internalVideoList.value[fromIndex] }
   const toSlot = { ...internalVideoList.value[toIndex] }
-
-  destroyPlayerAtIndex(fromIndex)
-  destroyPlayerAtIndex(toIndex)
 
   internalVideoList.value[fromIndex] = hasVideoContent(toSlot)
     ? { ...toSlot, id: `video-${toSlot.deviceId || 'slot'}-${fromIndex}` }
@@ -735,12 +705,6 @@ async function swapVideoChannels(fromIndex: number, toIndex: number) {
   } else if (activeVideoIndex.value === toIndex) {
     activeVideoIndex.value = fromIndex
   }
-
-  await nextTick()
-  await Promise.all([
-    replayVideoAtIndex(fromIndex),
-    replayVideoAtIndex(toIndex),
-  ])
 
   const moved = hasVideoContent(fromSlot) || hasVideoContent(toSlot)
   if (moved) {
@@ -790,23 +754,14 @@ async function startPlayAtScreen(
     device?: MonitorTreeDeviceNode
     fallbackUrl?: string | null
     preferAi?: boolean
+    pendingAiUrl?: string | null
   },
 ) {
   clearAiFallbackTimer(targetIndex)
-  if (videoRefs.value[targetIndex]) {
-    const existingInstance = videoRefs.value[targetIndex]
-    try {
-      if (existingInstance?.destroy && existingInstance.jessibuca) {
-        existingInstance.destroy()
-      }
-    } catch (error) {
-      console.warn('销毁现有播放器实例失败:', error)
-    }
-    videoRefs.value[targetIndex] = null
-  }
 
   const fallbackUrl = payload.fallbackUrl?.trim()
   const hasFallback = !!(payload.preferAi && fallbackUrl && fallbackUrl !== payload.url)
+  const pendingAi = payload.pendingAiUrl?.trim()
 
   internalVideoList.value[targetIndex] = {
     id: payload.id,
@@ -818,26 +773,25 @@ async function startPlayAtScreen(
     fallbackUrl: hasFallback ? fallbackUrl : null,
   }
 
-  await nextTick()
-
-  const tryPlay = (retryCount = 0) => {
-    const jessibucaInstance = videoRefs.value[targetIndex]
-    if (jessibucaInstance?.play) {
-      try {
-        jessibucaInstance.play()
-      } catch (error) {
-        console.error('播放失败:', error)
-        createMessage.error('播放失败，请重试')
-      }
-      return
-    }
-    if (retryCount < 15) {
-      setTimeout(() => tryPlay(retryCount + 1), 150)
-    } else {
-      createMessage.error('播放器初始化失败，请重试')
-    }
+  if (pendingAi && pendingAi !== payload.url && payload.deviceId) {
+    schedulePendingAiStreamUpgrade(
+      pendingAi,
+      payload.url,
+      () => {
+        const slot = internalVideoList.value[targetIndex]
+        return !!slot && slot.deviceId === payload.deviceId && slot.url !== pendingAi
+      },
+      () => {
+        const slot = internalVideoList.value[targetIndex]
+        if (!slot) return
+        internalVideoList.value[targetIndex] = {
+          ...slot,
+          url: pendingAi,
+          fallbackUrl: payload.url,
+        }
+      },
+    )
   }
-  setTimeout(() => tryPlay(), 200)
 
   if (!hasFallback) return
 
@@ -848,12 +802,7 @@ async function startPlayAtScreen(
     if (!slot || slot.url !== primaryUrl) return
     if (videoRefs.value[targetIndex]?.playing) return
 
-    createMessage.warning(
-      'AI 流暂不可用（请确认算法任务已启动且 ZLM 已收到推流），已切换为原始画面（无检测框）',
-    )
     internalVideoList.value[targetIndex] = { ...slot, url: fallbackUrl!, fallbackUrl: null }
-    await nextTick()
-    videoRefs.value[targetIndex]?.play?.()
   }, AI_PLAY_FALLBACK_MS)
   aiFallbackTimers.set(targetIndex, timerId)
 }
@@ -865,9 +814,7 @@ function handleStreamError(screenIdx: number) {
   const fb = slot.fallbackUrl?.trim()
   if (!fb || fb === slot.url) return
   clearAiFallbackTimer(screenIdx)
-  createMessage.warning('AI 流已中断，已切换为原始画面（无检测框）')
   internalVideoList.value[screenIdx] = { ...slot, url: fb, fallbackUrl: null }
-  nextTick(() => videoRefs.value[screenIdx]?.play?.())
 }
 
 async function resolvePlayUrlsForDevice(dev: MonitorTreeDeviceNode) {
@@ -886,7 +833,7 @@ async function reloadVideoAtIndex(index: number) {
     const gb = parseGbChannelKey(playId)
     if (!gb) return
     const deviceNode = (slot as any).device as MonitorTreeDeviceNode | undefined
-    const { url, fallbackUrl, preferAi } = await resolveGbChannelPlayUrls(
+    const { url, fallbackUrl, preferAi, pendingAiUrl } = await resolveGbChannelPlayUrls(
       gb.sipDeviceId,
       gb.channelId,
       { enableAi: enableAi.value, synced: deviceNode },
@@ -900,6 +847,7 @@ async function reloadVideoAtIndex(index: number) {
         location: slot.location,
         fallbackUrl,
         preferAi,
+        pendingAiUrl,
       })
     }
     return
@@ -908,7 +856,7 @@ async function reloadVideoAtIndex(index: number) {
   const dev = (slot as any).device as MonitorTreeDeviceNode | undefined
   if (!dev) return
 
-  const { url, fallbackUrl, preferAi } = await resolvePlayUrlsForDevice(dev)
+  const { url, fallbackUrl, preferAi, pendingAiUrl } = await resolvePlayUrlsForDevice(dev)
   if (!url) {
     createMessage.warn(enableAi.value ? '该设备暂无 AI 流或原始流地址' : '该设备暂无播放地址')
     return
@@ -921,6 +869,7 @@ async function reloadVideoAtIndex(index: number) {
     location: slot.location,
     fallbackUrl,
     preferAi,
+    pendingAiUrl,
   })
 }
 
@@ -936,7 +885,7 @@ watch(enableAi, () => {
   reloadAllVideosForAiToggle()
 })
 
-// 播放设备流（与分屏监控一致：启用 AI 时优先 AI 流，无则回退原始流）
+// 播放设备流（与分屏监控一致：默认 /live 原始流，启用 AI 时后台升级）
 const playDeviceStream = async (device: any) => {
   const dev: MonitorTreeDeviceNode = (device.device || device) as MonitorTreeDeviceNode
   const playId = String(device.id || dev.id || '')
@@ -966,7 +915,7 @@ const playDeviceStream = async (device: any) => {
       createMessage.warning('无效国标通道')
       return
     }
-    const { url, fallbackUrl, preferAi } = await resolveGbChannelPlayUrls(
+    const { url, fallbackUrl, preferAi, pendingAiUrl } = await resolveGbChannelPlayUrls(
       gb.sipDeviceId,
       gb.channelId,
       { enableAi: enableAi.value, synced: dev },
@@ -988,6 +937,7 @@ const playDeviceStream = async (device: any) => {
       device: dev,
       fallbackUrl,
       preferAi,
+      pendingAiUrl,
     })
     return
   }
@@ -997,7 +947,7 @@ const playDeviceStream = async (device: any) => {
     return
   }
 
-  const { url, fallbackUrl, preferAi } = await resolvePlayUrlsForDevice(dev)
+  const { url, fallbackUrl, preferAi, pendingAiUrl } = await resolvePlayUrlsForDevice(dev)
   if (!url) {
     createMessage.warning(
       enableAi.value
@@ -1016,6 +966,7 @@ const playDeviceStream = async (device: any) => {
     device: dev,
     fallbackUrl,
     preferAi,
+    pendingAiUrl,
   })
 }
 
@@ -1282,11 +1233,7 @@ onUnmounted(() => {
   // 清理所有视频播放器实例
   videoRefs.value.forEach((ref) => {
     if (ref?.jessibuca) {
-      try {
-        ref.destroy()
-      } catch {
-        /* 切页/卸载时 play 中断属正常，忽略 */
-      }
+      ref._unmounting = true
     }
   })
   videoRefs.value = []

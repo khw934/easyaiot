@@ -42,12 +42,17 @@ export interface DirectPlayUrlResult {
   fallbackUrl?: string | null;
   /** 已探测到 AI 流在推流，播放器超时后再回退原始流 */
   preferAi?: boolean;
+  /** 首帧先播原始流后，后台探测就绪可升级的 AI 地址 */
+  pendingAiUrl?: string | null;
 }
 
 /** 探测 AI 流是否在 ZLM 上就绪（毫秒） */
-export const AI_STREAM_PROBE_MS = 2000;
-/** AI 流播放超时后回退原始流（毫秒，仅 preferAi 时生效） */
-export const AI_PLAY_FALLBACK_MS = 6000;
+export const AI_STREAM_PROBE_MS = 1200;
+/** 直连 AI 流起播超时后回退原始流（毫秒，仅 preferAi 时生效） */
+export const AI_PLAY_FALLBACK_MS = 2500;
+/** Jessibuca 播 /ai 且可回退时，加载/心跳超时（秒），尽快触发 stream-error */
+export const AI_STREAM_LOAD_TIMEOUT_SEC = 3;
+export const AI_STREAM_HEART_TIMEOUT_SEC = 8;
 
 const LOCAL_STREAM_HOSTS = new Set(['localhost', '127.0.0.1', '0.0.0.0']);
 /** SRS HTTP-FLV / ZLM ws-flv 端口：mini 形态经 nginx 同页代理，浏览器不应直连 */
@@ -115,6 +120,66 @@ export function rewriteStreamHostToPageHost(url: string): string {
   }
 }
 
+/**
+ * 规范化 Jessibuca 播放地址。
+ * SRS 的 /live、/ai 经页面 nginx 或 Vite 代理时须用 HTTP-FLV（GET 长连接）；
+ * 改为 ws:// 时 Vite 开发环境常握手失败（Unexpected response code: 200）。
+ * 国标 /rtp 仍保留 ws-flv（ZLM）。
+ */
+export function normalizeJessibucaPlayUrl(url: string): string {
+  const trimmed = url?.trim();
+  if (!trimmed || typeof window === 'undefined') return trimmed;
+
+  try {
+    const parsed = new URL(trimmed);
+    if (/^\/(ai|live)\//i.test(parsed.pathname)) {
+      if (parsed.protocol === 'ws:') parsed.protocol = 'http:';
+      if (parsed.protocol === 'wss:') parsed.protocol = 'https:';
+      return parsed.toString();
+    }
+    return trimmed;
+  } catch {
+    return trimmed;
+  }
+}
+
+/** @deprecated 仅 ZLM /rtp 等已确认支持 WS 代理的场景使用；SRS /live 请用 HTTP-FLV */
+export function preferWsFlvForJessibuca(url: string): string {
+  const trimmed = url?.trim();
+  if (!trimmed || typeof window === 'undefined') return trimmed;
+
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol === 'ws:' || parsed.protocol === 'wss:') return trimmed;
+    if (!/\.flv(\?|$)/i.test(parsed.pathname)) return trimmed;
+    if (parsed.protocol === 'http:') {
+      parsed.protocol = 'ws:';
+      return parsed.toString();
+    }
+    if (parsed.protocol === 'https:') {
+      parsed.protocol = 'wss:';
+      return parsed.toString();
+    }
+    return trimmed;
+  } catch {
+    return trimmed;
+  }
+}
+
+/** fetch 探测流可用性须用 HTTP(S)，不能走 WS */
+export function flvUrlForHttpProbe(url: string): string {
+  const trimmed = url?.trim();
+  if (!trimmed) return trimmed;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol === 'ws:') parsed.protocol = 'http:';
+    else if (parsed.protocol === 'wss:') parsed.protocol = 'https:';
+    return parsed.toString();
+  } catch {
+    return trimmed;
+  }
+}
+
 /** RTMP 转 HTTP-FLV（Jessibuca 浏览器端需 HTTP/WS 地址） */
 export function convertRtmpToHttp(rtmpUrl: string): string | null {
   const trimmed = rtmpUrl?.trim();
@@ -138,8 +203,8 @@ function toBrowserPlayUrl(stream?: string | null): string | null {
   if (!trimmed) return null;
   const httpUrl = trimmed.startsWith('rtmp://') ? convertRtmpToHttp(trimmed) : trimmed;
   if (!httpUrl) return null;
-  // 所有播放地址统一走当前页面 host:port，便于不同环境下浏览器直接拉流
-  return rewriteStreamHostToPageHost(httpUrl);
+  // 所有播放地址统一走当前页面 host:port，便于不同环境下浏览器直接拉流（HTTP-FLV）
+  return normalizeJessibucaPlayUrl(rewriteStreamHostToPageHost(httpUrl));
 }
 
 /** 是否为算法任务输出的 AI 流（检测框烧录在此路流上） */
@@ -171,6 +236,7 @@ export async function probeStreamPlayable(
 ): Promise<boolean> {
   let target = url?.trim();
   if (!target || typeof window === 'undefined') return false;
+  target = flvUrlForHttpProbe(target);
   // 探测直连 fetch /ai 地址，受 secure_link 保护，需先签名（开启强制校验时未签名恒 403）。
   // 签发失败则降级探测未签名地址：强制校验关闭时仍能正常探测，开启时会 403 -> 探测返回 false -> 回退原始流。
   if (isProtectedStreamUrl(target)) {
@@ -240,16 +306,30 @@ export async function pickDirectPlayUrls(
   if (aiUrl === videoUrl) {
     return { url: aiUrl };
   }
-
-  // ai_http_stream 在库中常为预置占位地址（国标同步即有），须探测 ZLM 是否在推流
-  const aiReady = await probeStreamPlayable(aiUrl);
-  if (!aiReady) {
-    return { url: videoUrl };
-  }
   if (!videoUrl) {
-    return { url: aiUrl };
+    return { url: aiUrl, preferAi: true };
   }
-  return { url: aiUrl, fallbackUrl: videoUrl, preferAi: true };
+
+  // 启用 AI：先 instant 播 /live，后台 1.2s 探测 /ai 就绪后无感升级；/ai 失败则 3s 内回退 /live
+  return { url: videoUrl, pendingAiUrl: aiUrl };
+}
+
+/**
+ * 首帧已播原始流后，后台探测 AI 就绪再升级（分屏/大屏/弹窗共用）。
+ */
+export function schedulePendingAiStreamUpgrade(
+  aiUrl: string,
+  fallbackUrl: string,
+  shouldUpgrade: () => boolean,
+  onUpgrade: () => void,
+): void {
+  const ai = aiUrl?.trim();
+  const fb = fallbackUrl?.trim();
+  if (!ai || !fb || ai === fb) return;
+  void probeStreamPlayable(ai, AI_STREAM_PROBE_MS).then((ready) => {
+    if (!ready || !shouldUpgrade()) return;
+    onUpgrade();
+  });
 }
 
 export function supportsRtspForward(record: DeviceInfo): boolean {
@@ -299,6 +379,7 @@ export interface GbChannelPlayUrlResult {
   url: string | null;
   fallbackUrl?: string | null;
   preferAi?: boolean;
+  pendingAiUrl?: string | null;
 }
 
 /** 加载国标通道对应的 device 表记录（含 ai_http_stream） */
@@ -351,7 +432,7 @@ export async function resolveGbChannelPlayUrls(
   ]);
 
   if (synced) {
-    const { url, fallbackUrl, preferAi } = await pickDirectPlayUrls(
+    const { url, fallbackUrl, preferAi, pendingAiUrl } = await pickDirectPlayUrls(
       synced as DirectStreamFields,
       true,
     );
@@ -360,6 +441,7 @@ export async function resolveGbChannelPlayUrls(
         url,
         fallbackUrl: fallbackUrl ?? wvpUrl,
         preferAi,
+        pendingAiUrl,
       };
     }
   }
@@ -389,7 +471,7 @@ export async function openDeviceInDialogPlayer(
       String(record.channelId || record.presetPos || record.channel_id || '').trim();
     if (!sipDeviceId || !channelId) return false;
 
-    const { url, fallbackUrl, preferAi } = await resolveGbChannelPlayUrls(sipDeviceId, channelId, {
+    const { url, fallbackUrl, preferAi, pendingAiUrl } = await resolveGbChannelPlayUrls(sipDeviceId, channelId, {
       enableAi,
       synced: record,
     });
@@ -403,6 +485,7 @@ export async function openDeviceInDialogPlayer(
       http_stream: url,
       _fallbackUrl: fallbackUrl ?? null,
       _preferAi: preferAi ?? false,
+      _pendingAiUrl: pendingAiUrl ?? null,
       _enableAi: enableAi,
     });
     return true;
@@ -410,7 +493,7 @@ export async function openDeviceInDialogPlayer(
 
   if (!hasPlayableStream(record)) return false;
 
-  const { url, fallbackUrl, preferAi } = await pickDirectPlayUrls(record, enableAi);
+  const { url, fallbackUrl, preferAi, pendingAiUrl } = await pickDirectPlayUrls(record, enableAi);
   if (!url) return false;
 
   openModal(true, {
@@ -419,6 +502,7 @@ export async function openDeviceInDialogPlayer(
     http_stream: url,
     _fallbackUrl: fallbackUrl ?? null,
     _preferAi: preferAi ?? false,
+    _pendingAiUrl: pendingAiUrl ?? null,
     _enableAi: enableAi,
   });
   return true;

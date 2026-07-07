@@ -768,11 +768,13 @@ def _detections_to_overlay_entries(detections, timestamp):
 
 
 def _overlay_stale_frame_lag() -> int:
-    """积压队列中超过此帧差的待检帧视为过期，不应覆盖/清空当前叠框缓存。"""
+    """积压队列中超过此帧差的待检帧视为过期，不应用「空结果」清空当前叠框缓存。"""
     fps = max(1, AI_OUTPUT_FPS)
     interval = max(1, _runtime_overlay_extract_interval)
-    # 约 1 秒滞后（多路并发 overlay 队列积压时常见）
-    return max(interval * 4, fps)
+    device_n = max(1, len(overlay_detection_queues) or len(frame_counts) or 1)
+    # 多路 CPU 推理时队列滞后常达数百帧；按路数预留约 2s/路的排队预算
+    per_device_budget = max(interval * 6, fps * 2)
+    return max(interval * 4, fps, per_device_budget * device_n)
 
 
 def _is_stale_overlay_detection_frame(device_id: str, frame_number: int) -> bool:
@@ -787,8 +789,9 @@ def _overlay_effective_max_age_sec() -> float:
     interval = max(1, _runtime_overlay_extract_interval)
     fps = max(1, AI_OUTPUT_FPS)
     period = interval / fps
-    # 2 个 overlay 周期 + 推理/队列缓冲；单周期 TTL 在多路 CPU 推理积压下会立刻过期导致无框
-    return max(0.5, period * 2 + 0.2)
+    device_n = max(1, len(overlay_detection_queues) or len(frame_counts) or 1)
+    # 多路轮转 + CPU 推理延迟：TTL 需撑到下一次 overlay 检测完成
+    return max(0.8, period * (device_n + 2) + 0.3)
 
 
 def _update_device_latest_overlay(
@@ -798,30 +801,37 @@ def _update_device_latest_overlay(
     frame_number: int,
     *,
     applied_at: Optional[float] = None,
-):
-    """更新设备最新检测 overlay；无目标时清空缓存，避免旧框长期残留。"""
-    if _is_stale_overlay_detection_frame(device_id, frame_number):
-        return
+) -> bool:
+    """更新设备最新检测 overlay；无目标时清空缓存，避免旧框长期残留。
 
+    返回 True 表示缓存已写入/清空；False 表示因积压过期而跳过（仅空结果会跳过）。
+    """
+    is_stale = _is_stale_overlay_detection_frame(device_id, frame_number)
     # 推流侧按「检测完成时刻」计算 TTL，避免队列迟延导致刚写入即过期
-    cache_timestamp = applied_at if applied_at is not None else timestamp
+    cache_timestamp = applied_at if applied_at is not None else time.time()
 
     lock = device_latest_overlay_locks.setdefault(device_id, threading.Lock())
     with lock:
         if not detections:
+            if is_stale:
+                return False
             device_latest_overlays.pop(device_id, None)
-            return
+            return True
     entries = _detections_to_overlay_entries(detections, timestamp)
     if not entries:
         with lock:
+            if is_stale:
+                return False
             device_latest_overlays.pop(device_id, None)
-        return
+        return True
+    # 有目标时始终接受（即便帧号滞后，也是当前能拿到的最新推理结果）
     with lock:
         device_latest_overlays[device_id] = {
             'detections': entries,
             'timestamp': cache_timestamp,
             'frame_number': frame_number,
         }
+    return True
 
 
 def _apply_latest_overlay_if_needed(
@@ -4153,7 +4163,7 @@ def overlay_detection_worker(worker_id: int):
                         consecutive_errors = 0
                     continue
 
-                _update_device_latest_overlay(
+                cache_updated = _update_device_latest_overlay(
                     device_id_from_data,
                     detections,
                     timestamp,
@@ -4164,10 +4174,12 @@ def overlay_detection_worker(worker_id: int):
                 if frame_number % 10 == 0:
                     lag = frame_counts.get(device_id_from_data, frame_number) - frame_number
                     lag_hint = f", 队列滞后 {lag} 帧" if lag > _overlay_stale_frame_lag() // 2 else ""
+                    stale_hint = '' if cache_updated else ', 积压过期未写缓存'
                     logger.info(
                         f"✅ [Overlay {worker_id}] 检测完成: {frame_id} (帧号: {frame_number}), "
-                        f"更新 overlay 缓存 {len(detections)} 个目标 [{_summarize_detections(detections)}]"
-                        f"{lag_hint}"
+                        f"{'更新' if cache_updated else '跳过'} overlay 缓存 {len(detections)} 个目标 "
+                        f"[{_summarize_detections(detections)}]"
+                        f"{lag_hint}{stale_hint}"
                     )
             else:
                 idle_count += 1
@@ -4237,6 +4249,7 @@ def alert_detection_worker(worker_id: int):
                         fresh_detections,
                         timestamp,
                         frame_number,
+                        applied_at=time.time(),
                     )
 
                 if not detections:

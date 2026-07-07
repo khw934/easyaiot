@@ -192,6 +192,74 @@ def _enrich_channels_userless_flags(channels: List[Dict]) -> List[Dict]:
     return enriched
 
 
+def _message_database_url() -> str:
+    """消息服务数据库连接串（API 不可用时用于查询群机器人模板元数据）。"""
+    import os
+    url = (os.getenv('MESSAGE_DATABASE_URL') or '').strip()
+    if url:
+        return url
+    video_url = (os.getenv('DATABASE_URL') or '').strip()
+    if video_url and 'iot-video' in video_url:
+        return video_url.replace('iot-video20', 'iot-message20')
+    return 'postgresql://postgres:iot45722414822@localhost:5432/iot-message20'
+
+
+def _fetch_message_template_meta_from_db(method: str, template_id) -> Optional[Dict]:
+    """从消息库直接查询模板元数据（HTTP API 鉴权失败时的后备）。"""
+    if not template_id:
+        return None
+    try:
+        import psycopg2
+
+        method = (method or '').lower()
+        conn = psycopg2.connect(_message_database_url())
+        try:
+            cur = conn.cursor()
+            if method in ('wxcp', 'wechat', 'weixin'):
+                cur.execute(
+                    'SELECT radio_type, web_hook FROM t_msg_wx_cp WHERE id = %s',
+                    (str(template_id),),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return None
+                return {'radioType': row[0], 'webHook': row[1]}
+            if method in ('ding', 'dingtalk'):
+                cur.execute(
+                    'SELECT radio_type, web_hook FROM t_msg_ding WHERE id = %s',
+                    (str(template_id),),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return None
+                return {'radioType': row[0], 'webHook': row[1]}
+            if method in ('feishu', 'lark'):
+                cur.execute(
+                    'SELECT web_hook FROM t_msg_feishu WHERE id = %s',
+                    (str(template_id),),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return None
+                return {'webHook': row[0]}
+            if method in ('http', 'webhook'):
+                cur.execute(
+                    'SELECT url FROM t_msg_http WHERE id = %s',
+                    (str(template_id),),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return None
+                return {'url': row[0]}
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.debug(
+            f"从消息库查询模板元数据失败: method={method}, template_id={template_id}, error={e}"
+        )
+    return None
+
+
 def _fetch_message_template_meta(method: str, template_id) -> Optional[Dict]:
     """查询消息模板元数据，用于判断企业微信群机器人等免通知人渠道。"""
     if not template_id:
@@ -218,25 +286,29 @@ def _fetch_message_template_meta(method: str, template_id) -> Optional[Dict]:
             message_service_url = os.getenv('MESSAGE_SERVICE_URL', 'http://localhost:48080')
             jwt_token = os.getenv('JWT_TOKEN', '')
 
-        headers = {}
-        if jwt_token:
-            headers['Authorization'] = f'Bearer {jwt_token}'
-
-        response = requests.get(
-            f"{message_service_url}/admin-api/message/template/get",
-            params={'id': template_id, 'msgType': msg_type},
-            headers=headers,
-            timeout=5,
-        )
-        if response.status_code != 200:
-            return None
-        result = response.json()
-        if result.get('code') == 0 or result.get('success'):
-            data = result.get('data') or result
-            return data if isinstance(data, dict) else None
+        for header_name in ('Authorization', 'X-Authorization'):
+            headers = {}
+            if jwt_token:
+                headers[header_name] = f'Bearer {jwt_token}'
+            try:
+                response = requests.get(
+                    f"{message_service_url}/admin-api/message/template/get",
+                    params={'id': template_id, 'msgType': msg_type},
+                    headers=headers,
+                    timeout=5,
+                )
+                if response.status_code != 200:
+                    continue
+                result = response.json()
+                if result.get('code') == 0 or result.get('success'):
+                    data = result.get('data') or result
+                    if isinstance(data, dict):
+                        return data
+            except Exception:
+                continue
     except Exception as e:
         logger.debug(f"查询消息模板元数据失败: method={method}, template_id={template_id}, error={e}")
-    return None
+    return _fetch_message_template_meta_from_db(method, template_id)
 
 
 def _normalize_alert_interval_fields(

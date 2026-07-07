@@ -210,7 +210,7 @@ public class AlertNotificationConsumer {
     }
 
     /**
-     * HTTP/Webhook 渠道的目标 URL 在消息模板中，不依赖 notifyUsers。
+     * 群机器人 / Webhook 等渠道的目标在消息模板中，不依赖 notifyUsers。
      */
     private static boolean hasAlertNotificationConfig(
             List<Map<String, Object>> channels,
@@ -221,14 +221,31 @@ public class AlertNotificationConsumer {
         if (notifyUsers != null && !notifyUsers.isEmpty()) {
             return true;
         }
-        return channels.stream().anyMatch(ch -> {
-            Object method = ch.get("method");
-            if (method == null) {
-                return false;
-            }
-            String m = method.toString().toLowerCase();
-            return "http".equals(m) || "webhook".equals(m);
-        });
+        return channels.stream().anyMatch(AlertNotificationConsumer::isUserlessAlertChannel);
+    }
+
+    private static boolean isUserlessAlertChannel(Map<String, Object> channel) {
+        if (channel == null) {
+            return false;
+        }
+        if (Boolean.TRUE.equals(channel.get("userless"))) {
+            return true;
+        }
+        Object method = channel.get("method");
+        if (method == null) {
+            return false;
+        }
+        String m = method.toString().toLowerCase();
+        if ("http".equals(m) || "webhook".equals(m)) {
+            return true;
+        }
+        Object templateId = channel.get("template_id");
+        if (templateId == null) {
+            return false;
+        }
+        return "wxcp".equals(m) || "wechat".equals(m) || "weixin".equals(m)
+                || "ding".equals(m) || "dingtalk".equals(m)
+                || "feishu".equals(m) || "lark".equals(m);
     }
 }
 
