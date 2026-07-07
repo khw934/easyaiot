@@ -810,12 +810,13 @@ const [registerForm, { setFieldsValue, validate, resetFields, updateSchema, getF
       defaultValue: 5,
       componentProps: {
         placeholder: '5',
-        min: 1,
+        min: 0,
         max: 3600,
         step: 1,
         style: { width: '100%' },
       },
-      helpMessage: '同一摄像头两次上报告警事件的最小间隔，用于减轻 Kafka 积压',
+      helpMessage:
+        '同一摄像头两次上报告警事件的最小间隔，用于减轻 Kafka 积压。测试阶段可设为 0（不抑制）',
       ifShow: ({ values }) =>
         (values.task_type === 'realtime' || values.task_type === 'snap' || values.task_type === 'patrol') && !!values.alert_event_enabled,
     },
@@ -1003,7 +1004,8 @@ const [registerForm, { setFieldsValue, validate, resetFields, updateSchema, getF
         step: 60,
         style: { width: '100%' },
       },
-      helpMessage: '同一任务两次发送短信/邮件等通知的最小间隔，默认 300 秒（5 分钟）',
+      helpMessage:
+        '同一任务两次发送通知的最小间隔，默认 300 秒（5 分钟）。测试阶段可设为 0',
       ifShow: ({ values }) =>
         (values.task_type === 'realtime' || values.task_type === 'snap' || values.task_type === 'patrol') &&
         !!values.alert_event_enabled &&
@@ -1024,6 +1026,8 @@ const [registerForm, { setFieldsValue, validate, resetFields, updateSchema, getF
           return label.toLowerCase().indexOf(input.toLowerCase()) >= 0;
         },
       },
+      helpMessage:
+        '企业微信工作通知需先在通知中心配置消息配置、用户分组与消息模板；群机器人/Webhook 仅需模板填写 Webhook',
       ifShow: ({ values }) => (values.task_type === 'realtime' || values.task_type === 'snap' || values.task_type === 'patrol') && values.alert_event_enabled && values.alert_notification_enabled,
     },
     {
