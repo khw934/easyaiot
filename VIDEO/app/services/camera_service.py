@@ -1417,6 +1417,41 @@ def get_device_location_info(device_id: str, *, ensure_name: str | None = None) 
     }
 
 
+def resolve_device_inference_input(device_id: str) -> dict:
+    """为模型推理解析设备可取流的输入地址（含国标 WVP 点播解析）。"""
+    from app.services.stream_url_sync_service import resolve_device_stream_urls
+    from app.utils.gb28181_source import is_gb28181_source, resolve_gb28181_source
+
+    camera = _get_camera(device_id)
+    if not camera:
+        raise ValueError(f'设备 {device_id} 不存在')
+
+    source = (camera.source or '').strip()
+    rtsp_direct = (camera.rtsp_direct or '').strip()
+    rtmp_stream, http_stream, _, _ = resolve_device_stream_urls(camera)
+    rtmp_stream = (rtmp_stream or camera.rtmp_stream or '').strip()
+    http_stream = (http_stream or camera.http_stream or '').strip()
+
+    resolved_source = None
+    is_gb28181 = is_gb28181_source(source)
+    if is_gb28181:
+        resolved_source = resolve_gb28181_source(source, logger=logger)
+    elif source.lower().startswith(('rtsp://', 'rtmp://')):
+        resolved_source = source
+    elif rtsp_direct.lower().startswith(('rtsp://', 'rtmp://')):
+        resolved_source = rtsp_direct
+
+    return {
+        'device_id': device_id,
+        'source': source or None,
+        'rtsp_direct': rtsp_direct or None,
+        'rtmp_stream': rtmp_stream or None,
+        'http_stream': http_stream or None,
+        'resolved_source': (resolved_source or '').strip() or None,
+        'is_gb28181': is_gb28181,
+    }
+
+
 def get_camera_info(id: str, *, ensure_name: str | None = None) -> dict:
     """获取设备基本信息"""
     camera = _get_camera_for_location(id, name=ensure_name)

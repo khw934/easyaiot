@@ -739,6 +739,20 @@ def get_device_info(device_id):
         return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
 
+@camera_bp.route('/device/<string:device_id>/inference-input', methods=['GET'])
+def get_device_inference_input(device_id):
+    """解析设备推理输入流（RTSP/RTMP/SRS/国标点播）。"""
+    try:
+        data = resolve_device_inference_input(device_id)
+        return jsonify({'code': 0, 'msg': 'success', 'data': data})
+    except ValueError as e:
+        logger.error(f'解析设备推理输入流失败: {str(e)}')
+        return jsonify({'code': 400, 'msg': str(e)}), 400
+    except Exception as e:
+        logger.error(f'解析设备推理输入流失败: {str(e)}', exc_info=True)
+        return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
+
+
 @camera_bp.route('/device/<string:device_id>/ensure-spaces', methods=['POST'])
 def ensure_device_spaces_route(device_id):
     """确保设备已关联抓拍空间与录像空间（缺失则自动创建）"""

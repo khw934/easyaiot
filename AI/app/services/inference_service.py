@@ -128,6 +128,24 @@ class InferenceService:
         host = (os.getenv('MODEL_AI_SRS_HOST') or '127.0.0.1').strip()
         return host or '127.0.0.1'
 
+    def _get_stream_pull_hosts(self) -> list[str]:
+        """SRS 拉流主机候选：loopback、MODEL_AI_PUSH_URL 主机、POD_IP。"""
+        hosts: list[str] = []
+        seen: set[str] = set()
+
+        def add(host: str) -> None:
+            host = (host or '').strip()
+            if host and host not in seen:
+                seen.add(host)
+                hosts.append(host)
+
+        add(self._get_local_srs_host())
+        add(self._get_srs_host())
+        add((os.getenv('POD_IP') or '').strip())
+        add('127.0.0.1')
+        add('localhost')
+        return hosts
+
     def _get_local_srs_rtmp_port(self) -> int:
         try:
             return int(os.getenv('MODEL_AI_SRS_RTMP_PORT', '1935'))
@@ -152,6 +170,31 @@ class InferenceService:
         safe = re.sub(r'[^a-zA-Z0-9_-]+', '_', text)
         return safe or 'default'
 
+    def _enrich_inference_parameters_from_device(
+        self,
+        device_id: Optional[str],
+        parameters: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """通过 VIDEO 服务补全设备流地址（含国标点播解析）。"""
+        params = dict(parameters or {})
+        device_id = (device_id or '').strip()
+        if not device_id:
+            return params
+        try:
+            from app.utils.video_device_client import fetch_device_inference_input
+            device_input = fetch_device_inference_input(device_id)
+        except Exception as exc:
+            logging.warning(f'查询设备推理输入流失败 device_id={device_id}: {exc}')
+            return params
+        if not device_input:
+            return params
+
+        for key in ('rtsp_direct', 'rtmp_stream', 'http_stream', 'resolved_source'):
+            val = (device_input.get(key) or '').strip()
+            if val and not (params.get(key) or '').strip():
+                params[key] = val
+        return params
+
     def _build_inference_stream_urls(self, device_id: str, model_id=None) -> tuple[str, str]:
         """约定推理输出路径：ai/infer_{device_id}_m{model_id}（单层 app，兼容 SRS）"""
         model_suffix = self._normalize_model_suffix(model_id if model_id is not None else self.model_id)
@@ -163,11 +206,33 @@ class InferenceService:
         )
         return output_rtmp, output_http
 
-    def _resolve_input_stream_candidates(self, input_source: str, device_id: Optional[str]) -> list[str]:
-        """输入流优先级：1) RTSP 直连  2) 本机 SRS RTMP  3) 本机 HTTP-FLV  4) 显式 RTMP"""
+    def _http_flv_from_rtmp(self, rtmp_url: str) -> Optional[str]:
+        trimmed = (rtmp_url or '').strip()
+        if not trimmed.startswith('rtmp://'):
+            return None
+        try:
+            parsed = urlparse(trimmed)
+            host = parsed.hostname or '127.0.0.1'
+            path = (parsed.path or '/live').strip('/')
+            if not path:
+                path = 'live'
+            if not path.endswith('.flv'):
+                path = f'{path}.flv'
+            return f'http://{host}:{self._get_srs_http_port()}/{path}'
+        except Exception:
+            return None
+
+    def _resolve_input_stream_candidates(
+        self,
+        input_source: str,
+        device_id: Optional[str],
+        parameters: Optional[Dict[str, Any]] = None,
+    ) -> list[str]:
+        """输入流优先级：1) RTSP 直连  2) 设备已登记流地址  3) SRS live/{device_id}  4) 显式 RTMP/HTTP-FLV"""
         candidates: list[str] = []
         seen: set[str] = set()
         source = (input_source or '').strip()
+        params = parameters or {}
 
         def add(url: str) -> None:
             url = (url or '').strip()
@@ -178,16 +243,43 @@ class InferenceService:
         if source.startswith('rtsp://'):
             add(source)
 
+        resolved = (params.get('resolved_source') or '').strip()
+        if resolved.startswith(('rtsp://', 'rtmp://')):
+            add(resolved)
+            if resolved.startswith('rtmp://'):
+                http_flv = self._http_flv_from_rtmp(resolved)
+                if http_flv:
+                    add(http_flv)
+
+        for key in ('rtsp_direct', 'rtmp_stream', 'http_stream'):
+            val = (params.get(key) or '').strip()
+            if val.startswith('rtsp://'):
+                add(val)
+            elif val.startswith('rtmp://'):
+                add(val)
+                http_flv = self._http_flv_from_rtmp(val)
+                if http_flv:
+                    add(http_flv)
+            elif val.startswith(('http://', 'https://')) and (
+                val.endswith('.flv') or '/live/' in val or '/ai/' in val
+            ):
+                add(val)
+
         if device_id:
-            host = self._get_local_srs_host()
             rtmp_port = self._get_local_srs_rtmp_port()
             http_port = self._get_srs_http_port()
-            add(f'rtmp://{host}:{rtmp_port}/live/{device_id}')
-            add(f'http://{host}:{http_port}/live/{device_id}.flv')
+            for host in self._get_stream_pull_hosts():
+                add(f'rtmp://{host}:{rtmp_port}/live/{device_id}')
+                add(f'http://{host}:{http_port}/live/{device_id}.flv')
 
         if source.startswith('rtmp://'):
             add(source)
-        if source.startswith(('http://', 'https://')) and source.endswith('.flv'):
+            http_flv = self._http_flv_from_rtmp(source)
+            if http_flv:
+                add(http_flv)
+        if source.startswith(('http://', 'https://')) and (
+            source.endswith('.flv') or '/live/' in source or '/ai/' in source
+        ):
             add(source)
 
         if not candidates:
@@ -273,50 +365,67 @@ class InferenceService:
         candidates: list[str],
         stop_event: threading.Event,
         session_key: Optional[str] = None,
+        max_attempts: int = 15,
+        retry_interval_sec: float = 2.0,
     ) -> _FfmpegFrameReader:
-        """按优先级依次尝试打开输入流（ffmpeg 解码，RTSP 超时 5s）"""
+        """按优先级依次尝试打开输入流（ffmpeg 解码，RTSP 超时 5s；部署场景下可重试等待推流就绪）"""
         errors: list[str] = []
-        for url in candidates:
+        attempts = max(1, int(max_attempts or 1))
+
+        for attempt in range(1, attempts + 1):
             if stop_event.is_set():
                 raise RuntimeError('推理已取消')
-            logging.info(f'尝试打开输入流: {url}')
-            info = self._probe_stream_info(url, timeout_sec=5.0)
-            if stop_event.is_set():
-                raise RuntimeError('推理已取消')
-            if not info:
-                errors.append(f'{url}: 无法探测流信息')
-                continue
-            width, height, fps = info
-            proc = self._start_ffmpeg_input_reader(url)
-            reader = _FfmpegFrameReader(url, width, height, fps, proc)
-            if session_key:
-                with _rtsp_sessions_lock:
-                    session = _active_rtsp_sessions.get(session_key)
-                    if session:
-                        session['reader'] = reader
-            first_frame = reader.read()
-            if stop_event.is_set():
+            if attempt > 1:
+                logging.info(
+                    f'输入流尚未就绪，{retry_interval_sec:.1f}s 后重试 '
+                    f'({attempt}/{attempts})'
+                )
+                time.sleep(retry_interval_sec)
+                if stop_event.is_set():
+                    raise RuntimeError('推理已取消')
+
+            errors.clear()
+            for url in candidates:
+                if stop_event.is_set():
+                    raise RuntimeError('推理已取消')
+                logging.info(f'尝试打开输入流: {url}')
+                info = self._probe_stream_info(url, timeout_sec=5.0)
+                if stop_event.is_set():
+                    raise RuntimeError('推理已取消')
+                if not info:
+                    errors.append(f'{url}: 无法探测流信息')
+                    continue
+                width, height, fps = info
+                proc = self._start_ffmpeg_input_reader(url)
+                reader = _FfmpegFrameReader(url, width, height, fps, proc)
+                if session_key:
+                    with _rtsp_sessions_lock:
+                        session = _active_rtsp_sessions.get(session_key)
+                        if session:
+                            session['reader'] = reader
+                first_frame = reader.read()
+                if stop_event.is_set():
+                    reader.release()
+                    raise RuntimeError('推理已取消')
+                if first_frame is not None:
+                    reader._pending_frame = first_frame
+                    logging.info(f'输入流已连接: {url} ({width}x{height} @ {fps:.1f}fps)')
+                    return reader
+                stderr = ''
+                try:
+                    stderr = (proc.stderr.read() or b'').decode('utf-8', errors='ignore')[:200]
+                except Exception:
+                    pass
+                errors.append(f'{url}: 无有效视频帧{(" - " + stderr) if stderr else ""}')
                 reader.release()
-                raise RuntimeError('推理已取消')
-            if first_frame is not None:
-                reader._pending_frame = first_frame
-                logging.info(f'输入流已连接: {url} ({width}x{height} @ {fps:.1f}fps)')
-                return reader
-            stderr = ''
-            try:
-                stderr = (proc.stderr.read() or b'').decode('utf-8', errors='ignore')[:200]
-            except Exception:
-                pass
-            errors.append(f'{url}: 无有效视频帧{(" - " + stderr) if stderr else ""}')
-            reader.release()
-            if session_key:
-                with _rtsp_sessions_lock:
-                    session = _active_rtsp_sessions.get(session_key)
-                    if session and session.get('reader') is reader:
-                        session['reader'] = None
+                if session_key:
+                    with _rtsp_sessions_lock:
+                        session = _active_rtsp_sessions.get(session_key)
+                        if session and session.get('reader') is reader:
+                            session['reader'] = None
 
         raise RuntimeError(
-            '无法打开输入流（已按 RTSP → 本机 RTMP/HTTP-FLV 顺序尝试）: ' + '; '.join(errors)
+            '无法打开输入流（已按 RTSP → 设备登记流 → SRS live 顺序尝试）: ' + '; '.join(errors)
         )
 
     @staticmethod
@@ -1454,7 +1563,8 @@ class InferenceService:
             db.session.commit()
 
         try:
-            input_candidates = self._resolve_input_stream_candidates(rtsp_url, device_id)
+            parameters = self._enrich_inference_parameters_from_device(device_id, parameters)
+            input_candidates = self._resolve_input_stream_candidates(rtsp_url, device_id, parameters)
             # 同一时刻仅保留一路推理推流，启动前先停掉所有旧会话
             self.stop_rtsp_inference(stop_all=True)
             time.sleep(0.3)

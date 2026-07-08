@@ -518,7 +518,9 @@ import { useRoute, useRouter } from "vue-router";
 import { getModelPage, runInference, runClusterInference, uploadInputFile, getInferenceTaskDetail, getInferenceTasks, getDeployServicePage, getModelClasses, parseModelClassPayload, stopRtspInference } from "@/api/device/model";
 import { getLLMList, visionInference, activateLLM, type LLMModel } from "@/api/device/llm";
 import { getDeviceList, startStreamForwarding, getStreamStatus, type DeviceInfo } from '@/api/device/camera';
-import { rewriteStreamHostToPageHost, convertRtmpToHttp, resolveMonitorPlayUrl } from '@/views/camera/utils/devicePlay';
+import { ensureDeviceStreamForwardTask } from '@/api/device/stream_forward';
+import { rewriteStreamHostToPageHost, convertRtmpToHttp, resolveMonitorPlayUrl, probeStreamPlayable } from '@/views/camera/utils/devicePlay';
+import { isGb28181Device } from '@/views/camera/utils/deviceLabel';
 import { isNvrListRow } from '@/views/camera/utils/deviceLabel';
 import Jessibuca from '@/components/Player/module/jessibuca.vue';
 import { useMessage } from '@/hooks/web/useMessage';
@@ -1054,7 +1056,6 @@ const startDetection = async () => {
     ) {
       parameters.selected_classes = [...state.selectedClassNames];
     }
-    formData.append('parameters', JSON.stringify(parameters));
 
     // 如果是默认模型，添加模型文件路径参数
     if (state.selectedModelId === 'yolov8') {
@@ -1115,12 +1116,24 @@ const startDetection = async () => {
       const device = selectedCamera.value;
       if (device) {
         await ensureCameraStreamReady(device);
+        if (device.rtmp_stream) {
+          parameters.rtmp_stream = device.rtmp_stream;
+        }
+        if (device.http_stream) {
+          parameters.http_stream = device.http_stream;
+        }
+        const rtsp = getCameraRtspUrl(device);
+        if (rtsp) {
+          parameters.rtsp_direct = rtsp;
+        }
       }
       formData.append('device_id', state.selectedCameraId);
       if (selectedCameraRtsp.value) {
         formData.append('input_source', selectedCameraRtsp.value);
       }
     }
+
+    formData.append('parameters', JSON.stringify(parameters));
 
     // 判断使用哪个接口：优先级 大模型 > 模型服务 > 模型选择
     let response;
@@ -1674,30 +1687,72 @@ const refreshCameras = async () => {
   await reloadSelectedCameraPreview();
 };
 
-const ensureCameraStreamReady = async (device: DeviceInfo): Promise<void> => {
-  try {
-    const statusResp = await getStreamStatus(device.id);
-    const statusData = statusResp?.data ?? statusResp;
-    if (statusData?.status === 'running') {
-      return;
-    }
-  } catch (error) {
-    console.warn('查询摄像头推流状态失败:', error);
+const STREAM_READY_PROBE_MS = 2000;
+const STREAM_READY_MAX_WAIT_MS = 30000;
+
+const collectCameraStreamProbeUrls = (device: DeviceInfo): string[] => {
+  const urls: string[] = [];
+  const seen = new Set<string>();
+  const add = (url?: string | null) => {
+    const trimmed = (url || '').trim();
+    if (!trimmed || seen.has(trimmed)) return;
+    seen.add(trimmed);
+    urls.push(trimmed);
+  };
+
+  add(device.http_stream);
+  if (device.rtmp_stream) {
+    add(convertRtmpToHttp(device.rtmp_stream));
+    add(device.rtmp_stream);
+  }
+  add(`http://127.0.0.1:8080/live/${device.id}.flv`);
+  return urls;
+};
+
+const waitForCameraStreamReady = async (device: DeviceInfo): Promise<boolean> => {
+  const candidates = collectCameraStreamProbeUrls(device);
+  if (candidates.length === 0) {
+    return false;
   }
 
-  if (device.http_stream || device.rtmp_stream) {
+  const deadline = Date.now() + STREAM_READY_MAX_WAIT_MS;
+  while (Date.now() < deadline) {
+    for (const url of candidates) {
+      if (await probeStreamPlayable(url, STREAM_READY_PROBE_MS)) {
+        return true;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+  }
+  return false;
+};
+
+const ensureCameraStreamReady = async (device: DeviceInfo): Promise<void> => {
+  const isGb28181 = isGb28181Device(device.source, device.device_kind);
+
+  if (!isGb28181) {
+    try {
+      await ensureDeviceStreamForwardTask(device.id);
+    } catch (error) {
+      console.warn('确保推流转发任务失败，回退旧版推流接口:', error);
+      try {
+        await startStreamForwarding(device.id, true);
+      } catch (fallbackError) {
+        console.warn('启动摄像头推流失败，将继续尝试推理:', fallbackError);
+      }
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+
+    const ready = await waitForCameraStreamReady(device);
+    if (!ready) {
+      console.warn('摄像头 SRS 流尚未探测就绪，推理将依赖后端重试拉流');
+    }
     return;
   }
 
-  try {
-    const resp = await startStreamForwarding(device.id, true);
-    const payload = resp?.data ?? resp;
-    if (payload?.code === 0 || payload?.code === undefined) {
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-    }
-  } catch (error) {
-    console.warn('启动摄像头推流失败，将继续尝试推理:', error);
-  }
+  // 国标设备走 WVP 点播，由后端 resolve_gb28181_source 解析拉流地址
+  console.info('国标摄像头推理将由后端解析 WVP 点播地址');
 };
 
 const resolveCameraPreviewUrl = async (device: DeviceInfo): Promise<string | null> => {
