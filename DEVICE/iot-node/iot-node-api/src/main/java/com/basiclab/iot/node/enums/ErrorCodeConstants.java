@@ -28,6 +28,9 @@ public interface ErrorCodeConstants {
     ErrorCode STORAGE_CLUSTER_SOURCE_NOT_FOUND = new ErrorCode(1_005_006_000, "控制面未找到 Ceph storage-cluster 源目录");
     ErrorCode STORAGE_NODE_ROLE_INVALID = new ErrorCode(1_005_006_001, "当前节点角色不支持该 Ceph 存储操作");
 
+    ErrorCode MQTT_CLUSTER_SOURCE_NOT_FOUND = new ErrorCode(1_005_008_000, "控制面未找到 mqtt-cluster 源目录");
+    ErrorCode MQTT_NODE_ROLE_INVALID = new ErrorCode(1_005_008_001, "仅 MQTT 网关节点支持 EMQX 集群部署");
+
     ErrorCode CONTROL_PLANE_PEER_NOT_EXISTS = new ErrorCode(1_005_007_000, "对等中心节点不存在");
     ErrorCode CONTROL_PLANE_PEER_LIMIT = new ErrorCode(1_005_007_001, "最多支持 3 个中心节点（含本机）");
     ErrorCode CONTROL_PLANE_PEER_URL_EXISTS = new ErrorCode(1_005_007_002, "该中心节点地址已注册");

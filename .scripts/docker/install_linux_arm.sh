@@ -28,7 +28,7 @@
 #
 # 部署形态（EASYAIOT_DEPLOY_PROFILE）：
 #   mini(1)     - 4G：iot-system + VIDEO/AI/WEB + 最小中间件（无 Kafka/iot-sink/Nacos/Gateway/Infra）
-#   standard(2) - 16G：不含 TDengine/EMQX/iot-device/iot-tdengine/NodeRED
+#   standard(2) - 16G：不含 TDengine/iot-device/iot-tdengine/NodeRED（含 EMQX）
 #   full(3)     - 全量（默认，约 20G）
 # ============================================
 

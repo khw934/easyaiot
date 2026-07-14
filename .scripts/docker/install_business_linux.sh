@@ -11,7 +11,7 @@
 #
 # 部署形态（EASYAIOT_DEPLOY_PROFILE）：
 #   mini(1)     - 4G：iot-system + VIDEO/AI/WEB
-#   standard(2) - 16G：不含 TDengine/EMQX/iot-device/iot-tdengine 等
+#   standard(2) - 16G：不含 TDengine/iot-device/iot-tdengine 等（含 EMQX）
 #   full(3)     - 全量（默认，约 20G）
 #
 # 示例:
