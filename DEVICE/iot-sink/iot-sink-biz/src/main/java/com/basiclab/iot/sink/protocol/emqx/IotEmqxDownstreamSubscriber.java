@@ -6,7 +6,6 @@ import com.basiclab.iot.sink.enums.IotDeviceTopicEnum;
 import com.basiclab.iot.sink.messagebus.core.IotMessageBus;
 import com.basiclab.iot.sink.messagebus.core.IotMessageSubscriber;
 import com.basiclab.iot.sink.mq.message.IotDeviceMessage;
-import com.basiclab.iot.sink.util.IotDeviceMessageUtils;
 import com.basiclab.iot.sink.protocol.emqx.router.IotEmqxDownstreamHandler;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.SmartInitializingSingleton;
@@ -40,12 +39,15 @@ public class IotEmqxDownstreamSubscriber
 
     @Override
     public String getTopic() {
-        return IotDeviceMessageUtils.buildMessageBusGatewayDeviceMessageTopic(protocol.getServerId());
+        // 订阅通用设备消息 Topic：iot-device 下行通常不带 serverId。
+        // 仍兼容带 serverId 的网关专用 Topic（见 afterSingletonsInstantiated 双注册需求时由总线扩展）。
+        // 此处以通用 Topic 为主，确保直连与「经网关代理子设备」下行都能到达 EMQX Publish。
+        return IotDeviceMessage.MESSAGE_BUS_DEVICE_MESSAGE_TOPIC;
     }
 
     @Override
     public String getGroup() {
-        return getTopic();
+        return "iot-emqx-downstream-subscriber-" + protocol.getServerId();
     }
 
     @Override

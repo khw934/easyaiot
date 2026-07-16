@@ -75,6 +75,34 @@ ensure_platform_agent_after_stack() {
     ensure_platform_agent_if_needed || true
 }
 
+# 部署完成后并行常驻 mqtt-demo（01/02/03 独立 clientId），让设备详情各 Tab 有实时数据。
+# 关闭：EASYAIOT_ENABLE_MQTT_DEMO=0；仅部分：MQTT_DEMO_SCRIPTS=up,down
+ensure_mqtt_demo_after_stack() {
+    local demo_dir="${PROJECT_ROOT}/.scripts/mqtt-demo"
+    local starter="${demo_dir}/start_mqtt_demo.sh"
+    if [ "${EASYAIOT_ENABLE_MQTT_DEMO:-1}" = "0" ]; then
+        print_info "跳过 mqtt-demo 自动启动（EASYAIOT_ENABLE_MQTT_DEMO=0）"
+        return 0
+    fi
+    if [ "${EASYAIOT_ENABLE_EMQX:-1}" = "0" ]; then
+        print_info "跳过 mqtt-demo 自动启动（EMQX 未启用）"
+        return 0
+    fi
+    if [ ! -x "$starter" ] && [ -f "$starter" ]; then
+        chmod +x "$starter" "${demo_dir}/stop_mqtt_demo.sh" 2>/dev/null || true
+    fi
+    if [ ! -f "$starter" ]; then
+        print_warning "未找到 ${starter}，跳过 mqtt-demo"
+        return 0
+    fi
+    print_section "启动 MQTT 演示设备（01/02/03 并行）"
+    if bash "$starter"; then
+        print_success "mqtt-demo 已启动（日志: ${demo_dir}/run/logs/）"
+    else
+        print_warning "mqtt-demo 启动未完全成功，可稍后手动: bash ${starter}"
+    fi
+}
+
 # 日志文件配置
 LOG_DIR="${SCRIPT_DIR}/logs"
 mkdir -p "$LOG_DIR"
@@ -834,6 +862,7 @@ install_linux() {
     if [ $success_count -eq $total_count ]; then
         print_success "所有模块安装成功！"
         ensure_platform_agent_after_stack
+        ensure_mqtt_demo_after_stack
     else
         echo ""
         print_warning "部分模块安装失败，请检查日志"
@@ -1189,6 +1218,7 @@ start_all() {
     
     print_success "所有服务启动完成"
     ensure_platform_agent_after_stack
+    ensure_mqtt_demo_after_stack
 }
 
 # 停止所有服务
@@ -1259,6 +1289,7 @@ restart_all() {
 
     print_success "所有服务重启完成"
     ensure_platform_agent_after_stack
+    ensure_mqtt_demo_after_stack
 }
 
 # 查看所有服务状态
@@ -1453,6 +1484,7 @@ update_all() {
 
     print_success "所有服务更新完成"
     ensure_platform_agent_after_stack
+    ensure_mqtt_demo_after_stack
 }
 
 # 验证所有服务

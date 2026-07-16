@@ -21,6 +21,7 @@ import com.basiclab.iot.common.utils.bean.BeanPlusUtil;
 import com.basiclab.iot.common.utils.tdengine.TdUtils;
 import com.basiclab.iot.device.constant.DeviceStatusConstant;
 import com.basiclab.iot.device.constant.RedisPrefixConst;
+import com.basiclab.iot.device.dal.pgsql.device.DeviceCameraLinkMapper;
 import com.basiclab.iot.device.dal.pgsql.device.DeviceMapper;
 import com.basiclab.iot.device.domain.device.oo.DeviceReportOo;
 import com.basiclab.iot.device.domain.device.qo.DeviceIsExistQo;
@@ -32,9 +33,13 @@ import com.basiclab.iot.device.enums.device.MqttProtocolTopoStatusEnum;
 import com.basiclab.iot.device.hooks.BaseHook;
 import com.basiclab.iot.device.hooks.ConnectedHook;
 import com.basiclab.iot.device.hooks.DisconnectedHook;
+import com.basiclab.iot.device.messagebus.ServiceInvokeResponseHandler;
 import com.basiclab.iot.device.service.device.DeviceLocationService;
 import com.basiclab.iot.device.service.device.DeviceService;
+import com.basiclab.iot.device.service.device.DeviceServiceInvokeResponseService;
 import com.basiclab.iot.device.service.device.DeviceTopicService;
+import com.basiclab.iot.sink.util.IotDeviceMessageUtils;
+import com.basiclab.iot.device.service.product.ProductPropertiesService;
 import com.basiclab.iot.device.service.product.ProductService;
 import com.basiclab.iot.device.service.product.ProductServicesService;
 import com.basiclab.iot.file.RemoteFileService;
@@ -87,6 +92,8 @@ public class DeviceServiceImpl extends ServiceImpl<DeviceMapper, Device> impleme
     @Resource
     private DeviceMapper deviceMapper;
     @Resource
+    private DeviceCameraLinkMapper deviceCameraLinkMapper;
+    @Resource
     private RedisService redisService;
     @Autowired(required = false)
     private IotDownstreamMessageApi iotDownstreamMessageApi;
@@ -99,9 +106,13 @@ public class DeviceServiceImpl extends ServiceImpl<DeviceMapper, Device> impleme
     @Resource
     private ProductServicesService productServicesService;
     @Resource
+    private ProductPropertiesService productPropertiesService;
+    @Resource
     private RemoteTdEngineService remoteTdEngineService;
     @Resource
     private RemoteFileService remoteFileService;
+    @Resource
+    private DeviceServiceInvokeResponseService deviceServiceInvokeResponseService;
     @Value("${spring.datasource.dynamic.datasource.master.dbName:iot}")
     private String dataBaseName;
 
@@ -834,32 +845,57 @@ public class DeviceServiceImpl extends ServiceImpl<DeviceMapper, Device> impleme
 
     @Override
     public int associateGateway(List<Long> idList, String targetDeviceIdentification) {
-        //校验目标设备是否是网关
-        Device device = deviceMapper.findOneByDeviceIdentification(targetDeviceIdentification);
-        if (!Device.deviceTypeEnum.GATEWAY.getType().equals(device.getDeviceType())) {
+        if (idList == null || idList.isEmpty() || StringUtils.isEmpty(targetDeviceIdentification)) {
+            throw new RuntimeException("关联参数不能为空");
+        }
+        Device gateway = deviceMapper.findOneByDeviceIdentification(targetDeviceIdentification);
+        if (gateway == null || !Device.deviceTypeEnum.GATEWAY.getType().equals(gateway.getDeviceType())) {
             throw new RuntimeException("目标关联设备非网关设备");
         }
-        //校验设备id列表是否全部是子设备 todo
-        ArrayList<Device> devices = new ArrayList<>();
+        int successCount = 0;
         for (Long id : idList) {
-            Device deviceTmp = new Device();
-            deviceTmp.setId(id);
-            deviceTmp.setParentIdentification(targetDeviceIdentification);
-            devices.add(deviceTmp);
+            Device subDevice = deviceMapper.selectDeviceById(id);
+            if (subDevice == null) {
+                throw new RuntimeException("子设备不存在: " + id);
+            }
+            if (!Device.deviceTypeEnum.SUBSET.getType().equals(subDevice.getDeviceType())) {
+                throw new RuntimeException("仅支持关联网关子设备: " + subDevice.getDeviceName());
+            }
+            if (StringUtils.isNotEmpty(subDevice.getParentIdentification())
+                    && !targetDeviceIdentification.equals(subDevice.getParentIdentification())) {
+                throw new RuntimeException("子设备已关联其他网关: " + subDevice.getDeviceName());
+            }
+            LambdaUpdateWrapper<Device> wrapper = Wrappers.lambdaUpdate();
+            wrapper.eq(Device::getId, id)
+                    .set(Device::getParentIdentification, targetDeviceIdentification)
+                    .set(Device::getUpdateTime, LocalDateTime.now());
+            if (super.update(wrapper)) {
+                successCount++;
+            }
         }
-        return this.updateBatchById(devices) ? devices.size() : 0;
+        return successCount;
     }
 
     @Override
     public int disassociateGateway(List<Long> idList) {
-        ArrayList<Device> devices = new ArrayList<>();
-        for (Long id : idList) {
-            Device deviceTmp = new Device();
-            deviceTmp.setId(id);
-            deviceTmp.setParentIdentification("");
-            devices.add(deviceTmp);
+        if (idList == null || idList.isEmpty()) {
+            throw new RuntimeException("解绑设备列表不能为空");
         }
-        return this.updateBatchById(devices) ? devices.size() : 0;
+        int successCount = 0;
+        for (Long id : idList) {
+            Device subDevice = deviceMapper.selectDeviceById(id);
+            if (subDevice == null) {
+                continue;
+            }
+            LambdaUpdateWrapper<Device> wrapper = Wrappers.lambdaUpdate();
+            wrapper.eq(Device::getId, id)
+                    .set(Device::getParentIdentification, null)
+                    .set(Device::getUpdateTime, LocalDateTime.now());
+            if (super.update(wrapper)) {
+                successCount++;
+            }
+        }
+        return successCount;
     }
 
     @Override
@@ -982,59 +1018,694 @@ public class DeviceServiceImpl extends ServiceImpl<DeviceMapper, Device> impleme
         }
     }
 
+    /** 属性期望下发在指令日志中的标识 */
+    public static final String PROPERTY_SET_SERVICE_ID = "$property.set";
+
     @Override
-    public boolean invokeService(Long deviceId, String serviceIdentifier, Object params) {
+    public Map<String, Object> invokeService(Long deviceId, String serviceIdentifier, Object params) {
         try {
-            // 1. 参数校验
             if (deviceId == null) {
-                log.warn("[invokeService][设备ID为空，无法调用服务]");
-                return false;
+                throw new IllegalArgumentException("设备ID不能为空");
             }
             if (StrUtil.isBlank(serviceIdentifier)) {
-                log.warn("[invokeService][服务标识为空，设备ID: {}]", deviceId);
-                return false;
+                throw new IllegalArgumentException("服务标识不能为空");
             }
 
-            // 2. 查询设备信息
             Device device = findOneById(deviceId);
             if (device == null) {
-                log.warn("[invokeService][设备不存在，设备ID: {}]", deviceId);
-                return false;
+                throw new IllegalArgumentException("设备不存在");
             }
 
-            // 3. 检查 IotDownstreamMessageApi 是否可用
             if (iotDownstreamMessageApi == null) {
                 log.warn("[invokeService][IotDownstreamMessageApi 不存在，无法发送服务调用消息，设备ID: {}]", deviceId);
-                return false;
+                return null;
             }
 
-            // 4. 构建标准 Topic：/iot/{productIdentification}/{deviceIdentification}/service/downstream/invoke/{identifier}
+            Object normalizedParams = params != null ? params : Collections.emptyMap();
             String productIdentification = device.getProductIdentification();
             String deviceIdentification = device.getDeviceIdentification();
-            String topic = String.format("/iot/%s/%s/service/downstream/invoke/%s",
-                    productIdentification, deviceIdentification, serviceIdentifier);
+            Device gateway = resolveGatewayForSubset(device);
+            String topic;
+            Object downlinkParams = normalizedParams;
+            if (gateway != null) {
+                topic = String.format("/iot/%s/%s/sub/service/downstream/invoke/%s",
+                        gateway.getProductIdentification(), gateway.getDeviceIdentification(),
+                        serviceIdentifier);
+                downlinkParams = wrapSubDeviceDownlinkParams(device, normalizedParams);
+            } else {
+                topic = String.format("/iot/%s/%s/service/downstream/invoke/%s",
+                        productIdentification, deviceIdentification, serviceIdentifier);
+            }
 
-            // 5. 构建 IotDeviceMessage
-            IotDeviceMessage deviceMessage = IotDeviceMessage.builder()
-                    .deviceId(String.valueOf(deviceId))
-                    .tenantId(device.getTenantId())
-                    .method(IotDeviceMessageMethodEnum.SERVICE_INVOKE.getMethod()) // thing.service.invoke
+            String requestId = IotDeviceMessageUtils.generateMessageId();
+            IotDeviceMessage deviceMessage = IotDeviceMessage.requestOf(
+                    requestId,
+                    IotDeviceMessageMethodEnum.SERVICE_INVOKE.getMethod(),
+                    downlinkParams);
+            // 下行消息 deviceId 仍指向目标子设备，便于回执关联；Topic 指向网关代理路径
+            deviceMessage.setDeviceId(String.valueOf(deviceId));
+            deviceMessage.setTenantId(device.getTenantId());
+            deviceMessage.setTopic(topic);
+
+            String inputJson = JSONObject.toJSONString(normalizedParams);
+            DeviceServiceInvokeResponse pending = DeviceServiceInvokeResponse.builder()
+                    .messageId(deviceMessage.getId())
+                    .deviceId(deviceId)
+                    .deviceIdentification(deviceIdentification)
+                    .productIdentification(productIdentification)
+                    .serviceIdentifier(serviceIdentifier)
+                    .requestId(requestId)
+                    .method(deviceMessage.getMethod())
+                    .responseData(inputJson)
+                    .responseCode(ServiceInvokeResponseHandler.PENDING_CODE)
+                    .responseMsg("PENDING")
                     .topic(topic)
-                    .params(params)
+                    .reportTime(LocalDateTime.now())
+                    .tenantId(device.getTenantId() != null ? device.getTenantId() : 0L)
+                    .createTime(LocalDateTime.now())
                     .build();
+            deviceServiceInvokeResponseService.save(pending);
 
-            // 6. 发送下行消息
             iotDownstreamMessageApi.sendDownstreamMessage(deviceMessage);
 
-            log.info("[invokeService][服务调用消息发送成功，设备ID: {}, 服务标识: {}, Topic: {}]",
-                    deviceId, serviceIdentifier, topic);
-            return true;
+            log.info("[invokeService][服务调用消息发送成功，设备ID: {}, 服务标识: {}, Topic: {}, requestId: {}]",
+                    deviceId, serviceIdentifier, topic, requestId);
+            return buildDownlinkResult(requestId, device, topic, serviceIdentifier, normalizedParams);
 
+        } catch (IllegalArgumentException e) {
+            throw e;
         } catch (Exception e) {
             log.error("[invokeService][调用设备服务失败，设备ID: {}, 服务标识: {}, 错误: {}]",
                     deviceId, serviceIdentifier, e.getMessage(), e);
-            return false;
+            return null;
         }
+    }
+
+    @Override
+    public Map<String, Object> setProperties(Long deviceId, Object params) {
+        try {
+            if (deviceId == null) {
+                throw new IllegalArgumentException("设备ID不能为空");
+            }
+            if (!(params instanceof Map) || ((Map<?, ?>) params).isEmpty()) {
+                throw new IllegalArgumentException("请至少下发一个属性");
+            }
+            Device device = findOneById(deviceId);
+            if (device == null) {
+                throw new IllegalArgumentException("设备不存在");
+            }
+            if (iotDownstreamMessageApi == null) {
+                log.warn("[setProperties][IotDownstreamMessageApi 不存在，设备ID: {}]", deviceId);
+                return null;
+            }
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> rawProps = (Map<String, Object>) params;
+            Map<String, Object> coerced = validateAndCoerceProperties(
+                    device.getProductIdentification(), rawProps);
+
+            String productIdentification = device.getProductIdentification();
+            String deviceIdentification = device.getDeviceIdentification();
+            Device gateway = resolveGatewayForSubset(device);
+            String topic;
+            Object downlinkParams = coerced;
+            if (gateway != null) {
+                topic = String.format("/iot/%s/%s/sub/property/downstream/desired/set",
+                        gateway.getProductIdentification(), gateway.getDeviceIdentification());
+                downlinkParams = wrapSubDeviceDownlinkParams(device, coerced);
+            } else {
+                topic = String.format("/iot/%s/%s/property/downstream/desired/set",
+                        productIdentification, deviceIdentification);
+            }
+
+            String requestId = IotDeviceMessageUtils.generateMessageId();
+            IotDeviceMessage deviceMessage = IotDeviceMessage.requestOf(
+                    requestId,
+                    IotDeviceMessageMethodEnum.PROPERTY_SET.getMethod(),
+                    downlinkParams);
+            deviceMessage.setDeviceId(String.valueOf(deviceId));
+            deviceMessage.setTenantId(device.getTenantId());
+            deviceMessage.setTopic(topic);
+
+            // 写入云端 desired，便于影子对比与离线期望可见
+            mergeDesiredIntoExtension(device, coerced);
+
+            String inputJson = JSONObject.toJSONString(coerced);
+            DeviceServiceInvokeResponse pending = DeviceServiceInvokeResponse.builder()
+                    .messageId(deviceMessage.getId())
+                    .deviceId(deviceId)
+                    .deviceIdentification(deviceIdentification)
+                    .productIdentification(productIdentification)
+                    .serviceIdentifier(PROPERTY_SET_SERVICE_ID)
+                    .requestId(requestId)
+                    .method(deviceMessage.getMethod())
+                    .responseData(inputJson)
+                    .responseCode(ServiceInvokeResponseHandler.PENDING_CODE)
+                    .responseMsg("PENDING")
+                    .topic(topic)
+                    .reportTime(LocalDateTime.now())
+                    .tenantId(device.getTenantId() != null ? device.getTenantId() : 0L)
+                    .createTime(LocalDateTime.now())
+                    .build();
+            deviceServiceInvokeResponseService.save(pending);
+
+            iotDownstreamMessageApi.sendDownstreamMessage(deviceMessage);
+            log.info("[setProperties][属性期望值下发成功，设备ID: {}, Topic: {}, requestId: {}]",
+                    deviceId, topic, requestId);
+            return buildDownlinkResult(requestId, device, topic, PROPERTY_SET_SERVICE_ID, coerced);
+        } catch (IllegalArgumentException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("[setProperties][属性下发失败，设备ID: {}, 错误: {}]",
+                    deviceId, e.getMessage(), e);
+            return null;
+        }
+    }
+
+    private Map<String, Object> buildDownlinkResult(String requestId, Device device,
+                                                    String topic, String identifier, Object payload) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("requestId", requestId);
+        result.put("topic", topic);
+        result.put("identifier", identifier);
+        boolean viaGateway = topic != null && topic.contains("/sub/");
+        result.put("viaGateway", viaGateway);
+        String effectiveStatus = device.getConnectStatus();
+        if (viaGateway && StrUtil.isNotBlank(device.getParentIdentification())) {
+            result.put("gatewayIdentification", device.getParentIdentification());
+            Device gateway = deviceMapper.findOneByDeviceIdentification(device.getParentIdentification());
+            if (gateway != null) {
+                effectiveStatus = gateway.getConnectStatus();
+                result.put("gatewayConnectStatus", gateway.getConnectStatus());
+            }
+        }
+        result.put("connectStatus", effectiveStatus);
+        result.put("offline", !DeviceConnectStatusEnum.ONLINE.getValue()
+                .equalsIgnoreCase(String.valueOf(effectiveStatus)));
+        result.put("payload", payload);
+        return result;
+    }
+
+    /**
+     * 子设备且已绑定网关时返回网关设备，否则 null（走直连 Topic）
+     */
+    private Device resolveGatewayForSubset(Device device) {
+        if (device == null || !Device.deviceTypeEnum.SUBSET.getType().equals(device.getDeviceType())) {
+            return null;
+        }
+        if (StrUtil.isBlank(device.getParentIdentification())) {
+            log.warn("[resolveGatewayForSubset][子设备未关联网关，将按直连 Topic 下发，deviceId={}]",
+                    device.getId());
+            return null;
+        }
+        Device gateway = deviceMapper.findOneByDeviceIdentification(device.getParentIdentification());
+        if (gateway == null || !Device.deviceTypeEnum.GATEWAY.getType().equals(gateway.getDeviceType())) {
+            log.warn("[resolveGatewayForSubset][父设备不是网关或不存在，parent={}]",
+                    device.getParentIdentification());
+            return null;
+        }
+        return gateway;
+    }
+
+    private Map<String, Object> wrapSubDeviceDownlinkParams(Device subDevice, Object input) {
+        Map<String, Object> wrapped = new LinkedHashMap<>();
+        wrapped.put("productIdentification", subDevice.getProductIdentification());
+        wrapped.put("deviceIdentification", subDevice.getDeviceIdentification());
+        wrapped.put("input", input != null ? input : Collections.emptyMap());
+        return wrapped;
+    }
+
+    @Override
+    public Device ensureGatewaySubDevice(EnsureGatewaySubDeviceParam param) {
+        if (param == null || StrUtil.hasBlank(param.getGatewayIdentification(),
+                param.getProductIdentification(), param.getDeviceIdentification())) {
+            throw new IllegalArgumentException("网关/子设备产品/子设备标识不能为空");
+        }
+        Device gateway = deviceMapper.findOneByDeviceIdentification(param.getGatewayIdentification());
+        if (gateway == null || !Device.deviceTypeEnum.GATEWAY.getType().equals(gateway.getDeviceType())) {
+            throw new IllegalArgumentException("网关设备不存在或类型不是 GATEWAY: "
+                    + param.getGatewayIdentification());
+        }
+        Product product = productService.selectByProductIdentification(param.getProductIdentification());
+        if (product == null) {
+            throw new IllegalArgumentException("子设备产品不存在: " + param.getProductIdentification());
+        }
+        if (!Device.deviceTypeEnum.SUBSET.getType().equals(product.getProductType())
+                && !"SUBSET".equalsIgnoreCase(product.getProductType())) {
+            throw new IllegalArgumentException("子设备产品类型必须为 SUBSET: "
+                    + param.getProductIdentification());
+        }
+
+        Device existing = deviceMapper.selectByProductIdentificationAndDeviceIdentification(
+                param.getProductIdentification(), param.getDeviceIdentification());
+        if (existing != null) {
+            if (!Device.deviceTypeEnum.SUBSET.getType().equals(existing.getDeviceType())) {
+                throw new IllegalArgumentException("设备已存在但不是子设备类型: "
+                        + param.getDeviceIdentification());
+            }
+            if (StrUtil.isNotBlank(existing.getParentIdentification())
+                    && !param.getGatewayIdentification().equals(existing.getParentIdentification())) {
+                throw new IllegalArgumentException("子设备已关联其他网关: "
+                        + existing.getParentIdentification());
+            }
+            if (StrUtil.isBlank(existing.getParentIdentification())) {
+                LambdaUpdateWrapper<Device> wrapper = Wrappers.lambdaUpdate();
+                wrapper.eq(Device::getId, existing.getId())
+                        .set(Device::getParentIdentification, param.getGatewayIdentification())
+                        .set(Device::getUpdateTime, LocalDateTime.now());
+                super.update(wrapper);
+                existing.setParentIdentification(param.getGatewayIdentification());
+            }
+            if (param.getTenantId() != null && existing.getTenantId() == null) {
+                existing.setTenantId(param.getTenantId());
+            }
+            return existing;
+        }
+
+        Device created = new Device();
+        created.setClientId("gw-sub-" + param.getDeviceIdentification());
+        created.setAppId(StrUtil.blankToDefault(gateway.getAppId(), "DEFAULT"));
+        created.setDeviceIdentification(param.getDeviceIdentification());
+        String name = StrUtil.blankToDefault(param.getDeviceName(),
+                product.getProductName() + "-" + param.getDeviceIdentification());
+        created.setDeviceName(name);
+        created.setDeviceStatus("ENABLE");
+        created.setConnectStatus(DeviceConnectStatusEnum.OFFLINE.getValue());
+        created.setProductIdentification(param.getProductIdentification());
+        created.setDeviceType(Device.deviceTypeEnum.SUBSET.getType());
+        created.setParentIdentification(param.getGatewayIdentification());
+        created.setTenantId(param.getTenantId() != null ? param.getTenantId() : gateway.getTenantId());
+        created.setDeviceSn(param.getDeviceIdentification());
+        try {
+            insertDevice(created);
+        } catch (Exception e) {
+            throw new IllegalArgumentException("自动创建子设备失败: " + e.getMessage(), e);
+        }
+        Device saved = deviceMapper.selectByProductIdentificationAndDeviceIdentification(
+                param.getProductIdentification(), param.getDeviceIdentification());
+        if (saved == null) {
+            throw new IllegalArgumentException("自动创建子设备后查询失败: "
+                    + param.getDeviceIdentification());
+        }
+        // insertOrUpdateSelective 可能未写入 parent/tenant，创建后强制补齐绑定
+        LambdaUpdateWrapper<Device> bind = Wrappers.lambdaUpdate();
+        bind.eq(Device::getId, saved.getId())
+                .set(Device::getParentIdentification, param.getGatewayIdentification())
+                .set(Device::getDeviceType, Device.deviceTypeEnum.SUBSET.getType())
+                .set(Device::getUpdateTime, LocalDateTime.now());
+        if (created.getTenantId() != null) {
+            bind.set(Device::getTenantId, created.getTenantId());
+        }
+        super.update(bind);
+        saved.setParentIdentification(param.getGatewayIdentification());
+        saved.setDeviceType(Device.deviceTypeEnum.SUBSET.getType());
+        if (created.getTenantId() != null) {
+            saved.setTenantId(created.getTenantId());
+        }
+        log.info("[ensureGatewaySubDevice][自动创建子设备成功 gateway={} product={} device={} id={}]",
+                param.getGatewayIdentification(), param.getProductIdentification(),
+                param.getDeviceIdentification(), saved.getId());
+        return saved;
+    }
+
+    @Override
+    public int detachGatewaySubDevices(String gatewayIdentification, List<String> subDeviceIdentifications) {
+        if (StrUtil.isBlank(gatewayIdentification) || subDeviceIdentifications == null
+                || subDeviceIdentifications.isEmpty()) {
+            return 0;
+        }
+        int count = 0;
+        for (String subId : subDeviceIdentifications) {
+            if (StrUtil.isBlank(subId)) {
+                continue;
+            }
+            Device sub = deviceMapper.findOneByDeviceIdentification(subId);
+            if (sub == null || !gatewayIdentification.equals(sub.getParentIdentification())) {
+                continue;
+            }
+            LambdaUpdateWrapper<Device> wrapper = Wrappers.lambdaUpdate();
+            wrapper.eq(Device::getId, sub.getId())
+                    .set(Device::getParentIdentification, null)
+                    .set(Device::getConnectStatus, DeviceConnectStatusEnum.OFFLINE.getValue())
+                    .set(Device::getUpdateTime, LocalDateTime.now());
+            if (super.update(wrapper)) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    @Override
+    public int updateGatewaySubDeviceStatus(String gatewayIdentification,
+                                             List<Map<String, Object>> statusItems) {
+        if (StrUtil.isBlank(gatewayIdentification) || statusItems == null || statusItems.isEmpty()) {
+            return 0;
+        }
+        int count = 0;
+        for (Map<String, Object> item : statusItems) {
+            if (item == null) {
+                continue;
+            }
+            Object idObj = item.get("deviceIdentification");
+            if (idObj == null) {
+                idObj = item.get("deviceId");
+            }
+            Object statusObj = item.get("status");
+            if (statusObj == null) {
+                statusObj = item.get("connectStatus");
+            }
+            if (idObj == null || statusObj == null) {
+                continue;
+            }
+            String subId = String.valueOf(idObj);
+            String status = String.valueOf(statusObj).toUpperCase(Locale.ROOT);
+            if (!"ONLINE".equals(status) && !"OFFLINE".equals(status)) {
+                continue;
+            }
+            Device sub = deviceMapper.findOneByDeviceIdentification(subId);
+            if (sub == null || !gatewayIdentification.equals(sub.getParentIdentification())) {
+                continue;
+            }
+            LambdaUpdateWrapper<Device> wrapper = Wrappers.lambdaUpdate();
+            wrapper.eq(Device::getId, sub.getId())
+                    .set(Device::getConnectStatus, status)
+                    .set(Device::getUpdateTime, LocalDateTime.now());
+            if ("ONLINE".equals(status)) {
+                wrapper.set(Device::getLastOnlineTime, LocalDateTime.now())
+                        .set(Device::getActiveStatus, 1);
+            }
+            if (super.update(wrapper)) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    @Override
+    public Device ensureDeviceOnUplink(EnsureDeviceOnUplinkParam param) {
+        if (param == null || StrUtil.hasBlank(param.getProductIdentification(),
+                param.getDeviceIdentification())) {
+            throw new IllegalArgumentException("产品标识与设备标识不能为空");
+        }
+        Product product = productService.selectByProductIdentification(param.getProductIdentification());
+        if (product == null) {
+            throw new IllegalArgumentException("产品不存在: " + param.getProductIdentification());
+        }
+        String productType = StrUtil.blankToDefault(product.getProductType(), "").toUpperCase(Locale.ROOT);
+        // 子设备必须经网关代理建档；此处仅允许网关/普通直连产品
+        if (Device.deviceTypeEnum.SUBSET.getType().equals(productType)) {
+            throw new IllegalArgumentException("SUBSET 子设备请经网关代理 Topic 自动创建，不能直连建档: "
+                    + param.getProductIdentification());
+        }
+        if (!Device.deviceTypeEnum.GATEWAY.getType().equals(productType)
+                && !Device.deviceTypeEnum.COMMON.getType().equals(productType)
+                && !Device.deviceTypeEnum.VIDEO_COMMON.getType().equals(productType)) {
+            throw new IllegalArgumentException("不支持的产品类型自动建档: " + productType);
+        }
+
+        Device existing = deviceMapper.selectByProductIdentificationAndDeviceIdentification(
+                param.getProductIdentification(), param.getDeviceIdentification());
+        if (existing != null) {
+            if (param.getTenantId() != null && existing.getTenantId() == null) {
+                LambdaUpdateWrapper<Device> wrapper = Wrappers.lambdaUpdate();
+                wrapper.eq(Device::getId, existing.getId())
+                        .set(Device::getTenantId, param.getTenantId())
+                        .set(Device::getUpdateTime, LocalDateTime.now());
+                super.update(wrapper);
+                existing.setTenantId(param.getTenantId());
+            }
+            return existing;
+        }
+
+        Device created = new Device();
+        String clientId = StrUtil.blankToDefault(param.getClientId(),
+                "auto-" + param.getDeviceIdentification());
+        created.setClientId(clientId);
+        created.setAppId(StrUtil.blankToDefault(product.getAppId(), "DEFAULT"));
+        created.setDeviceIdentification(param.getDeviceIdentification());
+        String name = StrUtil.blankToDefault(param.getDeviceName(),
+                product.getProductName() + "-" + param.getDeviceIdentification());
+        created.setDeviceName(name);
+        created.setDeviceStatus("ENABLE");
+        created.setConnectStatus(DeviceConnectStatusEnum.OFFLINE.getValue());
+        created.setProductIdentification(param.getProductIdentification());
+        created.setDeviceType(productType);
+        created.setTenantId(param.getTenantId());
+        created.setDeviceSn(param.getDeviceIdentification());
+        try {
+            insertDevice(created);
+        } catch (Exception e) {
+            throw new IllegalArgumentException("上行自动创建设备失败: " + e.getMessage(), e);
+        }
+        Device saved = deviceMapper.selectByProductIdentificationAndDeviceIdentification(
+                param.getProductIdentification(), param.getDeviceIdentification());
+        if (saved == null) {
+            throw new IllegalArgumentException("上行自动创建设备后查询失败: "
+                    + param.getDeviceIdentification());
+        }
+        if (param.getTenantId() != null
+                && (saved.getTenantId() == null || !param.getTenantId().equals(saved.getTenantId()))) {
+            LambdaUpdateWrapper<Device> bind = Wrappers.lambdaUpdate();
+            bind.eq(Device::getId, saved.getId())
+                    .set(Device::getTenantId, param.getTenantId())
+                    .set(Device::getDeviceType, productType)
+                    .set(Device::getUpdateTime, LocalDateTime.now());
+            super.update(bind);
+            saved.setTenantId(param.getTenantId());
+            saved.setDeviceType(productType);
+        }
+        log.info("[ensureDeviceOnUplink][自动创建设备成功 product={} device={} type={} id={}]",
+                param.getProductIdentification(), param.getDeviceIdentification(),
+                productType, saved.getId());
+        return saved;
+    }
+
+    /**
+     * 按物模型校验可写属性并做类型强制转换
+     */
+    private Map<String, Object> validateAndCoerceProperties(String productIdentification,
+                                                            Map<String, Object> rawProps) {
+        if (StrUtil.isBlank(productIdentification)) {
+            // 无产品标识时透传，但仍做基础类型整理
+            Map<String, Object> passthrough = new LinkedHashMap<>();
+            rawProps.forEach((k, v) -> {
+                if (StrUtil.isNotBlank(k) && v != null) {
+                    passthrough.put(k, v);
+                }
+            });
+            if (passthrough.isEmpty()) {
+                throw new IllegalArgumentException("请至少下发一个属性");
+            }
+            return passthrough;
+        }
+
+        ProductProperties query = new ProductProperties();
+        query.setProductIdentification(productIdentification);
+        List<ProductProperties> allProps = productPropertiesService.selectProductPropertiesList(query);
+        Map<String, ProductProperties> byCode = allProps == null ? Collections.emptyMap()
+                : allProps.stream()
+                .filter(p -> StrUtil.isNotBlank(p.getPropertyCode()))
+                .collect(Collectors.toMap(ProductProperties::getPropertyCode, p -> p, (a, b) -> a));
+
+        Map<String, Object> coerced = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> entry : rawProps.entrySet()) {
+            String code = entry.getKey();
+            Object value = entry.getValue();
+            if (StrUtil.isBlank(code) || value == null || "".equals(value)) {
+                continue;
+            }
+            ProductProperties meta = byCode.get(code);
+            if (meta != null) {
+                String mode = StrUtil.blankToDefault(meta.getMethod(), "").toUpperCase();
+                if (!mode.contains("W")) {
+                    throw new IllegalArgumentException("属性 " + code + " 不可写");
+                }
+                coerced.put(code, coercePropertyValue(meta, value));
+            } else {
+                // 物模型未定义的键透传（兼容自定义字段）
+                coerced.put(code, value);
+            }
+        }
+        if (coerced.isEmpty()) {
+            throw new IllegalArgumentException("请至少下发一个有效属性值");
+        }
+        return coerced;
+    }
+
+    private Object coercePropertyValue(ProductProperties meta, Object raw) {
+        String datatype = StrUtil.blankToDefault(meta.getDatatype(), "string").trim().toLowerCase();
+        String text = String.valueOf(raw).trim();
+        try {
+            switch (datatype) {
+                case "int":
+                case "integer":
+                case "long": {
+                    long num = Long.parseLong(text);
+                    if (meta.getMin() != null && num < meta.getMin()) {
+                        throw new IllegalArgumentException(meta.getPropertyCode() + " 不能小于 " + meta.getMin());
+                    }
+                    if (meta.getMax() != null && num > meta.getMax()) {
+                        throw new IllegalArgumentException(meta.getPropertyCode() + " 不能大于 " + meta.getMax());
+                    }
+                    return num;
+                }
+                case "decimal":
+                case "double":
+                case "float":
+                case "number": {
+                    double num = Double.parseDouble(text);
+                    if (meta.getMin() != null && num < meta.getMin()) {
+                        throw new IllegalArgumentException(meta.getPropertyCode() + " 不能小于 " + meta.getMin());
+                    }
+                    if (meta.getMax() != null && num > meta.getMax()) {
+                        throw new IllegalArgumentException(meta.getPropertyCode() + " 不能大于 " + meta.getMax());
+                    }
+                    return num;
+                }
+                case "bool":
+                case "boolean": {
+                    if ("1".equals(text) || "true".equalsIgnoreCase(text) || "on".equalsIgnoreCase(text)) {
+                        return true;
+                    }
+                    if ("0".equals(text) || "false".equalsIgnoreCase(text) || "off".equalsIgnoreCase(text)) {
+                        return false;
+                    }
+                    throw new IllegalArgumentException(meta.getPropertyCode() + " 必须是布尔值");
+                }
+                case "jsonobject":
+                case "json":
+                case "object": {
+                    if (raw instanceof Map || raw instanceof List) {
+                        return raw;
+                    }
+                    return JSONObject.parse(text);
+                }
+                default: {
+                    if (meta.getMaxlength() != null && text.length() > meta.getMaxlength()) {
+                        throw new IllegalArgumentException(
+                                meta.getPropertyCode() + " 长度不能超过 " + meta.getMaxlength());
+                    }
+                    return text;
+                }
+            }
+        } catch (IllegalArgumentException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalArgumentException(
+                    "属性 " + meta.getPropertyCode() + " 类型应为 " + meta.getDatatype() + "，当前值无效");
+        }
+    }
+
+    private void mergeDesiredIntoExtension(Device device, Map<String, Object> properties) {
+        JSONObject extension = StringUtils.isEmpty(device.getExtension())
+                ? new JSONObject() : JSONObject.parseObject(device.getExtension());
+        if (extension == null) {
+            extension = new JSONObject();
+        }
+
+        JSONObject desired = extension.getJSONObject("desired");
+        if (desired == null) {
+            desired = new JSONObject();
+        }
+        desired.putAll(properties);
+        extension.put("desired", desired);
+        extension.put("desiredUpdateTime", LocalDateTime.now()
+                .format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
+
+        // 同步写入 shadow.desired，便于影子页直接对比
+        Object shadowObj = extension.get("shadow");
+        JSONObject shadow;
+        if (shadowObj instanceof JSONObject) {
+            shadow = (JSONObject) shadowObj;
+        } else if (shadowObj instanceof Map) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> shadowMap = (Map<String, Object>) shadowObj;
+            shadow = new JSONObject(shadowMap);
+        } else if (shadowObj instanceof String && StrUtil.isNotBlank((String) shadowObj)) {
+            shadow = JSONObject.parseObject((String) shadowObj);
+        } else {
+            shadow = new JSONObject();
+        }
+        JSONObject shadowDesired = shadow.getJSONObject("desired");
+        if (shadowDesired == null) {
+            shadowDesired = new JSONObject();
+        }
+        shadowDesired.putAll(properties);
+        shadow.put("desired", shadowDesired);
+        if (!shadow.containsKey("reported") && extension.get("properties") != null) {
+            shadow.put("reported", extension.get("properties"));
+        }
+        extension.put("shadow", shadow);
+
+        device.setExtension(extension.toJSONString());
+        this.updateById(device);
+    }
+
+    @Override
+    public List<DeviceCameraLink> listDeviceCameraLinks(Long iotDeviceId) {
+        if (iotDeviceId == null) {
+            return Collections.emptyList();
+        }
+        return deviceCameraLinkMapper.selectByIotDeviceId(iotDeviceId);
+    }
+
+    @Override
+    public List<String> listBoundCameraIds() {
+        List<String> ids = deviceCameraLinkMapper.selectAllBoundCameraIds();
+        return ids == null ? Collections.emptyList() : ids;
+    }
+
+    @Override
+    public int associateCameras(Long iotDeviceId, List<String> cameraDeviceIds) {
+        if (iotDeviceId == null || cameraDeviceIds == null || cameraDeviceIds.isEmpty()) {
+            throw new RuntimeException("关联参数不能为空");
+        }
+        Device device = deviceMapper.selectDeviceById(iotDeviceId);
+        if (device == null) {
+            throw new RuntimeException("IoT 设备不存在");
+        }
+        int successCount = 0;
+        LocalDateTime now = LocalDateTime.now();
+        for (String cameraDeviceId : cameraDeviceIds) {
+            if (StringUtils.isEmpty(cameraDeviceId)) {
+                continue;
+            }
+            DeviceCameraLink existing = deviceCameraLinkMapper.selectByCameraDeviceId(cameraDeviceId);
+            if (existing != null) {
+                if (iotDeviceId.equals(existing.getIotDeviceId())) {
+                    continue;
+                }
+                throw new RuntimeException("摄像头已被其他设备关联: " + cameraDeviceId);
+            }
+            DeviceCameraLink link = DeviceCameraLink.builder()
+                    .iotDeviceId(iotDeviceId)
+                    .cameraDeviceId(cameraDeviceId)
+                    .tenantId(device.getTenantId())
+                    .createTime(now)
+                    .updateTime(now)
+                    .build();
+            if (deviceCameraLinkMapper.insert(link) > 0) {
+                successCount++;
+            }
+        }
+        return successCount;
+    }
+
+    @Override
+    public int disassociateCameras(List<Long> linkIds) {
+        if (linkIds == null || linkIds.isEmpty()) {
+            throw new RuntimeException("解绑列表不能为空");
+        }
+        int successCount = 0;
+        for (Long linkId : linkIds) {
+            if (linkId == null) {
+                continue;
+            }
+            if (deviceCameraLinkMapper.deleteById(linkId) > 0) {
+                successCount++;
+            }
+        }
+        return successCount;
     }
 
 }

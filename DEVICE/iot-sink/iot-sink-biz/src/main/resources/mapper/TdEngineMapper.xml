@@ -16,15 +16,13 @@
                 <when test="item.fieldValue == null">
                     NULL
                 </when>
-                <!-- Check if dataType is not null and needs quoting -->
-                <when test="item.dataType != null and item.dataType.quoted">
+                <!-- boolean 用 isQuoted()，避免 OGNL 取不到 quoted 导致 NCHAR 未加引号、JSON 双引号被吃掉 -->
+                <when test="item.dataType != null and item.dataType.isQuoted()">
                     '${item.fieldValue}'
                 </when>
-                <!-- Default behavior if dataType is null (no quotes in this case) -->
                 <when test="item.dataType == null">
                     ${item.fieldValue}
                 </when>
-                <!-- If dataType doesn't require quotes -->
                 <otherwise>
                     ${item.fieldValue}
                 </otherwise>
@@ -37,15 +35,12 @@
                 <when test="item.fieldValue == null">
                     NULL
                 </when>
-                <!-- Check if dataType is not null and needs quoting -->
-                <when test="item.dataType != null and item.dataType.quoted">
+                <when test="item.dataType != null and item.dataType.isQuoted()">
                     '${item.fieldValue}'
                 </when>
-                <!-- Default behavior if dataType is null (no quotes in this case) -->
                 <when test="item.dataType == null">
                     ${item.fieldValue}
                 </when>
-                <!-- If dataType doesn't require quotes -->
                 <otherwise>
                     ${item.fieldValue}
                 </otherwise>

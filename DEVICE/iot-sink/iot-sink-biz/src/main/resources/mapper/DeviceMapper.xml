@@ -20,6 +20,8 @@
         <result column="ip_address" jdbcType="VARCHAR" property="ipAddress"/>
         <result column="extension" jdbcType="VARCHAR" property="extension"/>
         <result column="tenant_id" jdbcType="BIGINT" property="tenantId"/>
+        <result column="device_type" jdbcType="VARCHAR" property="deviceType"/>
+        <result column="parent_identification" jdbcType="VARCHAR" property="parentIdentification"/>
         <result column="create_by" jdbcType="VARCHAR" property="createBy"/>
         <result column="create_time" jdbcType="TIMESTAMP" property="createTime"/>
         <result column="update_by" jdbcType="VARCHAR" property="updateBy"/>
@@ -30,7 +32,8 @@
         d.id, d.client_id, d.app_id, d.device_identification, d.device_name,
         p.user_name, p.password, p.auth_mode, p.public_key, p.private_key,
         d.product_identification, d.device_status,
-        d.connect_status, p.protocol_type, d.ip_address, d.extension, d.tenant_id, d.create_by,
+        d.connect_status, p.protocol_type, d.ip_address, d.extension, d.tenant_id,
+        d.device_type, d.parent_identification, d.create_by,
         d.create_time, d.update_by, d.update_time
     </sql>
 
@@ -60,14 +63,18 @@
           and d.extension != ''
     </select>
 
+    <!--
+      认证按 username 解析出的 product/device 定位设备，不强制 client_id 相等。
+      原因：1) 库中 client_id 常为空；2) 同一设备允许多个演示连接（demo-up/down/full-*）并行。
+      clientId 参数仍传入，供上层日志比对；MQTT 层「同 clientId 单连接」由 Broker 保证。
+    -->
     <select id="selectDeviceForAuth" resultMap="BaseResultMap">
         select
         <include refid="Base_Column_List"/>
         from device d
         inner join product p on p.product_identification = d.product_identification
             and p.tenant_id = d.tenant_id
-        where d.client_id = #{clientId,jdbcType=VARCHAR}
-          and d.product_identification = #{productIdentification,jdbcType=VARCHAR}
+        where d.product_identification = #{productIdentification,jdbcType=VARCHAR}
           and d.device_identification = #{deviceIdentification,jdbcType=VARCHAR}
           and d.device_status = #{deviceStatus,jdbcType=VARCHAR}
           and upper(p.protocol_type) = upper(#{protocolType,jdbcType=VARCHAR})

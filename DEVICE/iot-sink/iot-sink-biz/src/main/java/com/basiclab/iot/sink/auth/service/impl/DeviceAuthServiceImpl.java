@@ -1,11 +1,16 @@
 package com.basiclab.iot.sink.auth.service.impl;
 
 import cn.hutool.core.lang.Assert;
+import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONObject;
 import cn.hutool.jwt.JWT;
 import cn.hutool.jwt.JWTUtil;
-import cn.hutool.core.util.StrUtil;
+import com.basiclab.iot.common.domain.R;
 import com.basiclab.iot.common.utils.date.LocalDateTimeUtils;
+import com.basiclab.iot.device.RemoteDeviceService;
+import com.basiclab.iot.device.RemoteProductService;
+import com.basiclab.iot.device.domain.device.vo.EnsureDeviceOnUplinkParam;
+import com.basiclab.iot.device.domain.device.vo.Product;
 import com.basiclab.iot.sink.auth.service.DeviceAuthService;
 import com.basiclab.iot.sink.biz.dto.IotDeviceAuthReqDTO;
 import com.basiclab.iot.sink.config.IotGatewayProperties;
@@ -13,16 +18,18 @@ import com.basiclab.iot.sink.dal.dataobject.DeviceDO;
 import com.basiclab.iot.sink.service.device.DeviceService;
 import com.basiclab.iot.sink.util.IotDeviceAuthUtils;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
-import java.time.LocalDateTime;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyFactory;
 import java.security.Signature;
 import java.security.spec.X509EncodedKeySpec;
+import java.time.LocalDateTime;
 import java.util.Base64;
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 
@@ -46,6 +53,12 @@ public class DeviceAuthServiceImpl implements DeviceAuthService {
 
     @Resource
     private IotGatewayProperties gatewayProperties;
+
+    @Autowired(required = false)
+    private RemoteProductService remoteProductService;
+
+    @Autowired(required = false)
+    private RemoteDeviceService remoteDeviceService;
 
     @Override
     public boolean authDevice(IotDeviceAuthReqDTO authReqDTO) {
@@ -74,10 +87,21 @@ public class DeviceAuthServiceImpl implements DeviceAuthService {
                 protocolType
         );
 
+        // 设备不存在：若产品为 GATEWAY/COMMON 且密码匹配，则自动建档后再认证
         if (device == null) {
-            log.warn("[authDevice][设备认证失败，clientId: {}, username: {}]", 
+            device = tryAutoCreateAndReload(authReqDTO, deviceInfo, protocolType);
+        }
+        if (device == null) {
+            log.warn("[authDevice][设备认证失败，clientId: {}, username: {}]",
                     authReqDTO.getClientId(), authReqDTO.getUsername());
             return null;
+        }
+
+        // 库中若已登记 client_id 且与本次不同，仅告警（允许多连接演示 / 空 client_id 设备）
+        if (StrUtil.isNotBlank(device.getClientId())
+                && !Objects.equals(device.getClientId(), authReqDTO.getClientId())) {
+            log.info("[authDevice][clientId 与库不一致仍放行，deviceId={}, stored={}, actual={}]",
+                    device.getId(), device.getClientId(), authReqDTO.getClientId());
         }
 
         String authMode = normalizeAuthMode(device.getAuthMode());
@@ -93,9 +117,73 @@ public class DeviceAuthServiceImpl implements DeviceAuthService {
             return null;
         }
 
-        log.info("[authDevice][设备认证成功，设备 ID: {}, 设备唯一标识: {}]", 
+        log.info("[authDevice][设备认证成功，设备 ID: {}, 设备唯一标识: {}]",
                 device.getId(), device.getDeviceIdentification());
         return device;
+    }
+
+    /**
+     * 设备档案不存在时，用产品密码校验后自动创建 GATEWAY/COMMON 设备。
+     */
+    private DeviceDO tryAutoCreateAndReload(IotDeviceAuthReqDTO authReqDTO,
+                                            IotDeviceAuthUtils.DeviceInfo deviceInfo,
+                                            String protocolType) {
+        if (remoteProductService == null || remoteDeviceService == null) {
+            return null;
+        }
+        try {
+            R<Product> productResult = remoteProductService.selectByProductIdentification(
+                    deviceInfo.getProductIdentification());
+            if (productResult == null || !productResult.isSuccess() || productResult.getData() == null) {
+                log.warn("[tryAutoCreateAndReload][产品不存在 product={}]",
+                        deviceInfo.getProductIdentification());
+                return null;
+            }
+            Product product = productResult.getData();
+            String productType = StrUtil.blankToDefault(product.getProductType(), "")
+                    .toUpperCase(Locale.ROOT);
+            if ("SUBSET".equals(productType)) {
+                log.warn("[tryAutoCreateAndReload][SUBSET 产品不允许直连自动建档 product={}]",
+                        deviceInfo.getProductIdentification());
+                return null;
+            }
+            if (!"GATEWAY".equals(productType) && !"COMMON".equals(productType)
+                    && !"VIDEO_COMMON".equals(productType)) {
+                return null;
+            }
+            if (StrUtil.isBlank(authReqDTO.getPassword())
+                    || !Objects.equals(product.getPassword(), authReqDTO.getPassword())) {
+                log.warn("[tryAutoCreateAndReload][产品密码不匹配，拒绝自动建档 product={}]",
+                        deviceInfo.getProductIdentification());
+                return null;
+            }
+            EnsureDeviceOnUplinkParam param = EnsureDeviceOnUplinkParam.builder()
+                    .productIdentification(deviceInfo.getProductIdentification())
+                    .deviceIdentification(deviceInfo.getDeviceIdentification())
+                    .clientId(authReqDTO.getClientId())
+                    .build();
+            R<com.basiclab.iot.device.domain.device.vo.Device> created =
+                    remoteDeviceService.ensureDeviceOnUplink(param);
+            if (created == null || !created.isSuccess() || created.getData() == null) {
+                log.warn("[tryAutoCreateAndReload][自动建档失败 msg={}]",
+                        created != null ? created.getMsg() : "null");
+                return null;
+            }
+            log.info("[tryAutoCreateAndReload][自动建档成功 product={} device={} id={}]",
+                    deviceInfo.getProductIdentification(), deviceInfo.getDeviceIdentification(),
+                    created.getData().getId());
+            return deviceService.getDeviceForProtocolAuth(
+                    authReqDTO.getClientId(),
+                    deviceInfo.getProductIdentification(),
+                    deviceInfo.getDeviceIdentification(),
+                    "ENABLE",
+                    protocolType
+            );
+        } catch (Exception e) {
+            log.error("[tryAutoCreateAndReload][异常 product={} device={}]",
+                    deviceInfo.getProductIdentification(), deviceInfo.getDeviceIdentification(), e);
+            return null;
+        }
     }
 
     private boolean verifyAccountPassword(IotDeviceAuthReqDTO request, DeviceDO device) {

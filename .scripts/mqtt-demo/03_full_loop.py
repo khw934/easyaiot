@@ -2,19 +2,19 @@
 """
 全链路一键演示：边上报属性，边听下行；可选自动 HTTP 下发一次服务。
 
-终端 1（推荐拆开跑 01 / 02 更直观）也能用本脚本同时验证上下行。
+默认 clientId=demo-full-{device}，可与 01/02 对同一设备并行运行。
+部署常驻也可只靠 01+02；本脚本适合单窗口冒烟或与 01/02 并行对照。
 
 示例:
   python3 03_full_loop.py \\
-    --product YOUR_PRODUCT --device YOUR_DEVICE --tenant-id 1 \\
-    --password YOUR_PRODUCT_PASSWORD \\
+    --product 9820630576939008 --device 9720084293632004 --tenant-id 1 \\
+    --password 32423 \\
     --invoke-api --token JWT --device-id 123
 """
 
 from __future__ import annotations
 
 import json
-import math
 import signal
 import threading
 import time
@@ -24,9 +24,11 @@ from typing import Any, Dict
 
 from common import (
     build_arg_parser,
+    build_demo_property_params,
     build_message,
     connect_mqtt,
     device_all_filter,
+    property_desired_set_ack_topic,
     property_topic,
     publish_json,
     service_response_topic,
@@ -40,7 +42,9 @@ def extract_service_identifier(topic: str) -> str:
     return "unknown"
 
 
-def http_invoke(api_base: str, token: str, device_id: int, service_id: str, params: Dict[str, Any]) -> None:
+def http_invoke(
+    api_base: str, token: str, device_id: int, service_id: str, params: Dict[str, Any]
+) -> None:
     url = f"{api_base.rstrip('/')}/device/{device_id}/invokeService?serviceIdentifier={service_id}"
     req = urllib.request.Request(
         url,
@@ -57,7 +61,10 @@ def http_invoke(api_base: str, token: str, device_id: int, service_id: str, para
 
 
 def main() -> None:
-    parser = build_arg_parser("上下行同时跑，便于一次看完页面变化")
+    parser = build_arg_parser(
+        "上下行同时跑，便于一次看完页面变化",
+        client_id_role="full",
+    )
     parser.add_argument("--interval", type=float, default=3.0)
     parser.add_argument("--rounds", type=int, default=20, help="上行轮数后自动退出；0=不限")
     parser.add_argument("--invoke-api", action="store_true")
@@ -76,17 +83,38 @@ def main() -> None:
             return
         down_count["n"] += 1
         print(f"\n[DOWN #{down_count['n']}] {msg.topic}\n{text}\n")
+        try:
+            body = json.loads(text)
+        except json.JSONDecodeError:
+            body = {}
+        request_id = body.get("requestId")
+
+        if "/property/downstream/desired/set" in msg.topic:
+            reply = build_message(
+                tenant_id=args.tenant_id,
+                method="thing.property.set",
+                params=body.get("params") or {},
+                request_id=request_id,
+                data={"success": True},
+                code=0,
+                msg="ok",
+            )
+            publish_json(
+                client,
+                property_desired_set_ack_topic(args.product, args.device),
+                reply,
+                qos=args.qos,
+            )
+            print("[ACK] property desired set")
+            return
+
         if "/service/downstream/invoke/" in msg.topic:
             ident = extract_service_identifier(msg.topic)
-            try:
-                body = json.loads(text)
-            except json.JSONDecodeError:
-                body = {}
             reply = build_message(
                 tenant_id=args.tenant_id,
                 method="thing.service.invoke",
                 params={"result": "ok"},
-                request_id=body.get("requestId"),
+                request_id=request_id,
                 data={"success": True},
                 code=0,
                 msg="ok",
@@ -97,11 +125,12 @@ def main() -> None:
                 reply,
                 qos=args.qos,
             )
+            print(f"[ACK] service {ident}")
 
     client = connect_mqtt(args, on_message=on_message)
     client.subscribe(device_all_filter(args.product, args.device), qos=args.qos)
     print(f"[SUB] {device_all_filter(args.product, args.device)}")
-    print("页面: 影子/运行状态看上行；在「服务→下发服务」看下行打到本终端")
+    print("页面: 影子/运行状态看上行；在「设备控制」下发属性/服务看下行与 ACK")
 
     if args.invoke_api:
         if not args.token or not args.device_id:
@@ -134,18 +163,13 @@ def main() -> None:
     i = 0
     while not stop["flag"]:
         i += 1
-        params = {
-            "temperature": round(22 + 4 * math.sin(i / 2.5), 2),
-            "humidity": round(55 + 8 * math.cos(i / 3.0), 2),
-            "counter": i,
-        }
         publish_json(
             client,
             up_topic,
             build_message(
                 tenant_id=args.tenant_id,
                 method="thing.property.post",
-                params=params,
+                params=build_demo_property_params(args.device, i),
             ),
             qos=args.qos,
         )

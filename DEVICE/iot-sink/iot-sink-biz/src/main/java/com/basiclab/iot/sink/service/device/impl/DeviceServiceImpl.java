@@ -1,6 +1,5 @@
 package com.basiclab.iot.sink.service.device.impl;
 
-import cn.hutool.core.lang.Assert;
 import com.basiclab.iot.common.core.KeyValue;
 import com.basiclab.iot.common.core.context.TenantContextHolder;
 import com.basiclab.iot.common.core.util.TenantUtils;
@@ -34,6 +33,11 @@ public class DeviceServiceImpl implements DeviceService {
     private static final Duration CACHE_EXPIRE = Duration.ofMinutes(1);
 
     /**
+     * Guava LoadingCache 不允许 null；用哨兵表示「查无」，避免抛 UncheckedExecutionException。
+     */
+    private static final IotDeviceRespDTO NOT_FOUND = new IotDeviceRespDTO();
+
+    /**
      * 通过 id 查询设备的缓存
      */
     private final LoadingCache<TenantDeviceIdKey, IotDeviceRespDTO> deviceCaches = buildAsyncReloadingCache(
@@ -44,9 +48,12 @@ public class DeviceServiceImpl implements DeviceService {
                     return TenantUtils.execute(key.getTenantId(), () -> {
                         Long id = key.getDeviceId();
                         DeviceDO deviceDO = deviceMapper.selectById(id);
-                    Assert.notNull(deviceDO, "设备({}) 不能为空", id);
+                        if (deviceDO == null) {
+                            log.warn("[getDevice][设备不存在 id={} tenantId={}]", id, key.getTenantId());
+                            return NOT_FOUND;
+                        }
                         IotDeviceRespDTO device = convertToDTO(deviceDO);
-                    // 相互缓存
+                        // 相互缓存
                         deviceCaches2.put(new TenantDeviceKey(device.getTenantId(),
                                 device.getProductIdentification(), device.getDeviceIdentification()), device);
                         return device;
@@ -67,9 +74,13 @@ public class DeviceServiceImpl implements DeviceService {
                                 key.getProductIdentification(), key.getDeviceIdentification());
                         DeviceDO deviceDO = deviceMapper.selectByProductIdentificationAndDeviceIdentification(
                                 kv.getKey(), kv.getValue());
-                    Assert.notNull(deviceDO, "设备({}/{}) 不能为空", kv.getKey(), kv.getValue());
+                        if (deviceDO == null) {
+                            log.warn("[getDevice][设备不存在 product={}/device={} tenantId={}，请确认 Topic 与库中标识一致]",
+                                    kv.getKey(), kv.getValue(), key.getTenantId());
+                            return NOT_FOUND;
+                        }
                         IotDeviceRespDTO device = convertToDTO(deviceDO);
-                    // 相互缓存
+                        // 相互缓存
                         deviceCaches.put(new TenantDeviceIdKey(device.getTenantId(), device.getId()), device);
                         return device;
                     });
@@ -82,14 +93,34 @@ public class DeviceServiceImpl implements DeviceService {
     @Override
     public IotDeviceRespDTO getDevice(String productIdentification, String deviceIdentification) {
         Long tenantId = TenantContextHolder.getRequiredTenantId();
-        return deviceCaches2.getUnchecked(new TenantDeviceKey(
+        IotDeviceRespDTO device = deviceCaches2.getUnchecked(new TenantDeviceKey(
                 tenantId, productIdentification, deviceIdentification));
+        return device == NOT_FOUND ? null : device;
+    }
+
+    @Override
+    public IotDeviceRespDTO getDeviceIgnoreTenant(String productIdentification, String deviceIdentification) {
+        Boolean oldIgnore = TenantContextHolder.isIgnore();
+        try {
+            TenantContextHolder.setIgnore(true);
+            DeviceDO deviceDO = deviceMapper.selectByProductIdentificationAndDeviceIdentification(
+                    productIdentification, deviceIdentification);
+            if (deviceDO == null) {
+                log.warn("[getDeviceIgnoreTenant][设备不存在 product={}/device={}]",
+                        productIdentification, deviceIdentification);
+                return null;
+            }
+            return convertToDTO(deviceDO);
+        } finally {
+            TenantContextHolder.setIgnore(oldIgnore);
+        }
     }
 
     @Override
     public IotDeviceRespDTO getDevice(Long id) {
         Long tenantId = TenantContextHolder.getRequiredTenantId();
-        return deviceCaches.getUnchecked(new TenantDeviceIdKey(tenantId, id));
+        IotDeviceRespDTO device = deviceCaches.getUnchecked(new TenantDeviceIdKey(tenantId, id));
+        return device == NOT_FOUND ? null : device;
     }
 
     @Override
@@ -110,6 +141,8 @@ public class DeviceServiceImpl implements DeviceService {
         dto.setIpAddress(deviceDO.getIpAddress());
         dto.setExtension(deviceDO.getExtension());
         dto.setTenantId(deviceDO.getTenantId());
+        dto.setDeviceType(deviceDO.getDeviceType());
+        dto.setParentIdentification(deviceDO.getParentIdentification());
         return dto;
     }
 

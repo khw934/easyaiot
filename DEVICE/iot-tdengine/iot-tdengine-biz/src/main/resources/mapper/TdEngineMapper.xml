@@ -2,12 +2,13 @@
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.basiclab.iot.tdengine.mapper.TdEngineMapper">
 
+    <!-- TDengine 结果集列名一律小写，别名勿用 camelCase -->
     <resultMap id="deviceDataMap" type="com.basiclab.iot.tdengine.domain.DeviceData">
-        <result column="lastUpdateTime" property="lastUpdateTime" />
-        <result column="functionType" property="functionType" />
+        <result column="lastupdatetime" property="lastUpdateTime" />
+        <result column="functiontype" property="functionType" />
         <result column="identifier" property="identifier" />
-        <result column="dataType" property="dataType" />
-        <result column="dataValue" property="dataValue" />
+        <result column="datatype" property="dataType" />
+        <result column="datavalue" property="dataValue" />
     </resultMap>
 
     <update id="createDatabase" parameterType="String">
@@ -252,26 +253,30 @@
         from #{dataBaseName}.#{tableName}
     </select>
 
-    <!-- MQTT 上行整包写入 params，这里取最近一条；属性拆分在 device 侧完成 -->
+    <!-- 按超级表 + TAG(device_identification) 查最近若干条；跳过 params/data 皆空的无效行 -->
     <select id="getLastRowsListByIdentifier" resultMap="deviceDataMap">
-        select report_time as lastUpdateTime,
-               'properties' as functionType,
+        select cast(report_time as bigint) as lastupdatetime,
+               'properties' as functiontype,
                '' as identifier,
-               'JSON' as dataType,
-               params as dataValue
-        from ${tdDatabaseName}.${tdSuperTableName}_${deviceIdentification}
+               'JSON' as datatype,
+               coalesce(params, data) as datavalue
+        from ${tdDatabaseName}.${tdSuperTableName}
+        where device_identification = #{deviceIdentification}
+          and coalesce(params, data) is not null
+          and coalesce(params, data) != ''
         order by report_time desc
-        limit 1
+        limit 10
     </select>
     <select id="getDeviceHistory"
             resultType="com.basiclab.iot.device.domain.device.vo.TDDeviceDataResp">
-        select report_time as ts,
-               'properties' as functionType,
-               method as propertyCode,
-               'JSON' as dataType,
-               params as dataValue
-        from ${tdDatabaseName}.${tdSuperTableName}_${deviceIdentification}
+        select cast(report_time as bigint) as ts,
+               'properties' as functiontype,
+               method as propertycode,
+               'JSON' as datatype,
+               params as datavalue
+        from ${tdDatabaseName}.${tdSuperTableName}
         <where>
+            device_identification = #{deviceIdentification}
             <if test="startTime != null and startTime != ''">
                 AND report_time >= #{startTime}
             </if>
@@ -284,8 +289,9 @@
 
     <!-- 查询设备时序数据（通用查询方法） -->
     <select id="queryDeviceTimeSeriesData" resultType="Map">
-        select * from ${tdDatabaseName}.${superTableName}_${deviceIdentification}
+        select * from ${tdDatabaseName}.${superTableName}
         <where>
+            device_identification = #{deviceIdentification}
             <if test="identifier != null and identifier != ''">
                 AND identifier = #{identifier}
             </if>

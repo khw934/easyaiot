@@ -12,7 +12,10 @@ import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
 import org.springframework.web.bind.annotation.*;
 
+import org.springframework.format.annotation.DateTimeFormat;
+
 import javax.annotation.Resource;
+import java.time.LocalDateTime;
 import java.util.List;
 
 /**
@@ -40,12 +43,22 @@ public class DeviceEventController extends BaseController {
     @ApiOperation("查询设备事件列表")
     @GetMapping("/list")
     public TableDataInfo list(DeviceEvent deviceEvent,
-                              @RequestParam(required = false) Long deviceId) {
+                              @RequestParam(required = false) Long deviceId,
+                              @RequestParam(required = false)
+                              @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") LocalDateTime startTime,
+                              @RequestParam(required = false)
+                              @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") LocalDateTime endTime) {
         if (StringUtils.isEmpty(deviceEvent.getDeviceIdentification()) && deviceId != null) {
             Device device = deviceService.findOneById(deviceId);
             if (device != null) {
                 deviceEvent.setDeviceIdentification(device.getDeviceIdentification());
             }
+        }
+        if (startTime != null) {
+            deviceEvent.setStartTime(startTime);
+        }
+        if (endTime != null) {
+            deviceEvent.setEndTime(endTime);
         }
         startPage();
         List<DeviceEvent> list = deviceEventService.selectDeviceEventList(deviceEvent);

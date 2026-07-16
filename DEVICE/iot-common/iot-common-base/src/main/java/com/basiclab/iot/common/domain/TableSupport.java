@@ -17,6 +17,16 @@ public class TableSupport
     public static final String PAGE_NUM = "pageNum";
 
     /**
+     * 前端表格默认分页参数名（兼容）
+     */
+    public static final String PAGE_NO = "pageNo";
+
+    /**
+     * 历史分页参数名（兼容）
+     */
+    public static final String PAGE = "page";
+
+    /**
      * 每页显示记录数
      */
     public static final String PAGE_SIZE = "pageSize";
@@ -42,7 +52,14 @@ public class TableSupport
     public static PageDomain getPageDomain()
     {
         PageDomain pageDomain = new PageDomain();
-        pageDomain.setPageNum(ServletUtils.getParameterToInt(PAGE_NUM));
+        Integer pageNum = ServletUtils.getParameterToInt(PAGE_NUM);
+        if (pageNum == null) {
+            pageNum = ServletUtils.getParameterToInt(PAGE_NO);
+        }
+        if (pageNum == null) {
+            pageNum = ServletUtils.getParameterToInt(PAGE);
+        }
+        pageDomain.setPageNum(pageNum);
         pageDomain.setPageSize(ServletUtils.getParameterToInt(PAGE_SIZE));
         pageDomain.setOrderByColumn(ServletUtils.getParameter(ORDER_BY_COLUMN));
         pageDomain.setIsAsc(ServletUtils.getParameter(IS_ASC));

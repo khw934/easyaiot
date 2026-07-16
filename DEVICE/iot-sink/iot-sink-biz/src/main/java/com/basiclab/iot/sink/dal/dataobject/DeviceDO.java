@@ -101,6 +101,16 @@ public class DeviceDO {
     private Long tenantId;
 
     /**
+     * 设备类型：COMMON / GATEWAY / SUBSET / VIDEO_COMMON
+     */
+    private String deviceType;
+
+    /**
+     * 所属网关设备标识（子设备时有值）
+     */
+    private String parentIdentification;
+
+    /**
      * 创建者
      */
     private String createBy;

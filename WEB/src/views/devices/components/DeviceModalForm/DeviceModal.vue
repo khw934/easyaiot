@@ -1,54 +1,91 @@
 <template>
-  <BasicModal
+  <BasicDrawer
+    v-bind="$attrs"
     @register="register"
     :title="getTitle"
-    @cancel="handleCancel"
-    :width="920"
-    @ok="handleOk"
-    :canFullscreen="false"
+    width="1400"
+    placement="right"
+    :showFooter="true"
+    :showCancelBtn="false"
+    :showOkBtn="false"
+    destroy-on-close
   >
-    <div class="device-modal">
-      <Spin :spinning="state.editLoading">
-        <Form :labelCol="{ span: 3 }" :model="validateInfos" :wrapperCol="{ span: 21 }">
-          <Row :gutter="12">
+    <template #footer>
+      <div class="footer-buttons">
+        <Button @click="handleCancel">取消</Button>
+        <Button type="primary" :loading="state.editLoading" @click="handleOk">保存</Button>
+      </div>
+    </template>
+
+    <Spin :spinning="state.editLoading">
+      <div class="device-drawer-content">
+        <Divider orientation="left">基础信息</Divider>
+        <Form
+          :label-col="SETUP_FORM_LABEL_COL"
+          :wrapper-col="SETUP_FORM_WRAPPER_COL"
+          class="section-form"
+        >
+          <Row :gutter="16">
             <Col :span="12">
-              <FormItem label="设备SN" name="deviceSn" v-bind="validateInfos.deviceSn"
-                        :labelCol="{ span: 6 }" :wrapperCol="{ span: 18 }">
-                <Input v-model:value="modelRef.deviceSn" />
+              <FormItem label="设备名称" required v-bind="validateInfos.deviceName">
+                <Input v-model:value="modelRef.deviceName" placeholder="请输入设备名称" />
               </FormItem>
             </Col>
             <Col :span="12">
-              <FormItem label="应用场景" name="appId" v-bind="validateInfos.appId"
-                        :labelCol="{ span: 6 }" :wrapperCol="{ span: 18 }">
-                <Input v-model:value="modelRef.appId" />
+              <FormItem label="设备SN" required v-bind="validateInfos.deviceSn">
+                <Input v-model:value="modelRef.deviceSn" placeholder="请输入设备SN" />
               </FormItem>
             </Col>
             <Col :span="12">
-              <FormItem label="设备名称" name="deviceName" v-bind="validateInfos.deviceName"
-                        :labelCol="{ span: 6 }" :wrapperCol="{ span: 18 }">
-                <Input v-model:value="modelRef.deviceName" />
-              </FormItem>
-            </Col>
-            <Col :span="12">
-              <FormItem label="客户端 ID" name="clientId"
-                        :labelCol="{ span: 6 }" :wrapperCol="{ span: 18 }">
-                <Input v-model:value="modelRef.clientId" placeholder="例如 tcp-client-01" />
-              </FormItem>
-            </Col>
-            <Col :span="12">
-              <FormItem label="所属产品" name="productIdentification" v-bind="validateInfos.productIdentification"
-                        :labelCol="{ span: 6 }" :wrapperCol="{ span: 18 }">
+              <FormItem label="所属产品" required v-bind="validateInfos.productIdentification">
                 <Select
                   v-model:value="modelRef.productIdentification"
-                  placeholder="所属产品"
+                  placeholder="请选择所属产品"
                   :options="state.productList"
+                  :disabled="state.lockProduct"
                   allowClear
+                  show-search
+                  :filter-option="filterProductOption"
                   @change="handleProductChange"
                 />
               </FormItem>
             </Col>
+            <Col :span="12">
+              <FormItem label="应用场景" required v-bind="validateInfos.appId">
+                <Input
+                  v-model:value="modelRef.appId"
+                  placeholder="选择产品后自动填充，也可手动输入"
+                  :disabled="!!selectedProduct?.appId"
+                />
+              </FormItem>
+            </Col>
+            <Col v-if="state.isEdit" :span="12">
+              <FormItem label="设备标识">
+                <Input :value="modelRef.deviceIdentification" disabled />
+              </FormItem>
+            </Col>
+            <Col v-if="state.isEdit" :span="12">
+              <FormItem label="产品类型">
+                <Input :value="deviceTypeLabel" disabled />
+              </FormItem>
+            </Col>
+            <Col :span="12">
+              <FormItem label="客户端 ID">
+                <Input
+                  v-model:value="modelRef.clientId"
+                  placeholder="留空则系统自动生成"
+                />
+              </FormItem>
+            </Col>
           </Row>
+        </Form>
 
+        <Divider orientation="left">接入配置</Divider>
+        <Form
+          :label-col="SETUP_FORM_LABEL_COL"
+          :wrapper-col="SETUP_FORM_WRAPPER_COL"
+          class="section-form"
+        >
           <Alert
             v-if="selectedProtocol"
             class="protocol-alert"
@@ -58,33 +95,31 @@
           />
 
           <template v-if="selectedProtocol === 'MODBUS_TCP'">
-            <Divider orientation="left">Modbus TCP 连接</Divider>
-            <Row :gutter="12">
+            <Row :gutter="16">
               <Col :span="10">
-                <FormItem label="主机地址" :labelCol="{ span: 7 }" :wrapperCol="{ span: 17 }">
+                <FormItem label="主机地址" required>
                   <Input v-model:value="protocolConfig.host" placeholder="192.168.1.100" />
                 </FormItem>
               </Col>
               <Col :span="5">
-                <FormItem label="端口" :labelCol="{ span: 8 }" :wrapperCol="{ span: 16 }">
-                  <InputNumber v-model:value="protocolConfig.port" :min="1" :max="65535" />
+                <FormItem label="端口">
+                  <InputNumber v-model:value="protocolConfig.port" :min="1" :max="65535" class="w-full" />
                 </FormItem>
               </Col>
               <Col :span="4">
-                <FormItem label="站号" :labelCol="{ span: 10 }" :wrapperCol="{ span: 14 }">
-                  <InputNumber v-model:value="protocolConfig.unitId" :min="0" :max="255" />
+                <FormItem label="站号">
+                  <InputNumber v-model:value="protocolConfig.unitId" :min="0" :max="255" class="w-full" />
                 </FormItem>
               </Col>
               <Col :span="5">
-                <FormItem label="周期(ms)" :labelCol="{ span: 11 }" :wrapperCol="{ span: 13 }">
-                  <InputNumber v-model:value="protocolConfig.pollIntervalMs" :min="1000" :step="1000" />
+                <FormItem label="周期(ms)">
+                  <InputNumber v-model:value="protocolConfig.pollIntervalMs" :min="1000" :step="1000" class="w-full" />
                 </FormItem>
               </Col>
             </Row>
             <div class="point-header">
               <span>采集点位</span>
-              <Button type="dashed" size="small" @click="addModbusPoint">
-                <template #icon><PlusOutlined /></template>
+              <Button type="dashed" size="small" preIcon="ant-design:plus-outlined" @click="addModbusPoint">
                 添加点位
               </Button>
             </div>
@@ -96,37 +131,35 @@
               <InputNumber v-model:value="point.scale" :step="0.1" placeholder="倍率" />
               <Tooltip title="允许平台写入"><Switch v-model:checked="point.writable" size="small" /></Tooltip>
               <Tooltip title="删除点位">
-                <Button danger type="text" @click="removePoint(index)"><DeleteOutlined /></Button>
+                <Button danger type="text" preIcon="ant-design:delete-outlined" @click="removePoint(index)" />
               </Tooltip>
             </div>
           </template>
 
           <template v-else-if="selectedProtocol === 'OPCUA'">
-            <Divider orientation="left">OPC UA 连接</Divider>
-            <FormItem label="Endpoint">
+            <FormItem label="Endpoint" required>
               <Input v-model:value="protocolConfig.endpointUrl" placeholder="opc.tcp://192.168.1.100:4840" />
             </FormItem>
-            <Row :gutter="12">
+            <Row :gutter="16">
               <Col :span="8">
-                <FormItem label="用户名" :labelCol="{ span: 8 }" :wrapperCol="{ span: 16 }">
+                <FormItem label="用户名">
                   <Input v-model:value="protocolConfig.username" placeholder="匿名可留空" />
                 </FormItem>
               </Col>
               <Col :span="8">
-                <FormItem label="密码" :labelCol="{ span: 7 }" :wrapperCol="{ span: 17 }">
+                <FormItem label="密码">
                   <InputPassword v-model:value="protocolConfig.password" />
                 </FormItem>
               </Col>
               <Col :span="8">
-                <FormItem label="周期(ms)" :labelCol="{ span: 9 }" :wrapperCol="{ span: 15 }">
-                  <InputNumber v-model:value="protocolConfig.pollIntervalMs" :min="1000" :step="1000" />
+                <FormItem label="周期(ms)">
+                  <InputNumber v-model:value="protocolConfig.pollIntervalMs" :min="1000" :step="1000" class="w-full" />
                 </FormItem>
               </Col>
             </Row>
             <div class="point-header">
               <span>采集节点</span>
-              <Button type="dashed" size="small" @click="addOpcUaPoint">
-                <template #icon><PlusOutlined /></template>
+              <Button type="dashed" size="small" preIcon="ant-design:plus-outlined" @click="addOpcUaPoint">
                 添加节点
               </Button>
             </div>
@@ -136,7 +169,7 @@
               <Select v-model:value="point.dataType" :options="opcUaDataTypeOptions" />
               <Tooltip title="允许平台写入"><Switch v-model:checked="point.writable" size="small" /></Tooltip>
               <Tooltip title="删除节点">
-                <Button danger type="text" @click="removePoint(index)"><DeleteOutlined /></Button>
+                <Button danger type="text" preIcon="ant-design:delete-outlined" @click="removePoint(index)" />
               </Tooltip>
             </div>
           </template>
@@ -148,86 +181,169 @@
             show-icon
             message="设备通过 TCP 长连接接入网关 8091 端口，首包使用 auth 方法认证。"
           />
+          <Alert
+            v-else-if="selectedProtocol === 'MQTT'"
+            class="protocol-alert"
+            type="info"
+            show-icon
+            message="设备使用 MQTT 协议接入，凭据由平台根据产品认证配置自动生成。"
+          />
+          <Alert
+            v-else-if="selectedProtocol === 'HTTP'"
+            class="protocol-alert"
+            type="info"
+            show-icon
+            message="设备使用 HTTP 协议上报数据，请确保产品物模型与协议脚本已配置。"
+          />
+          <div v-else-if="modelRef.productIdentification && !selectedProtocol" class="form-hint">
+            所选产品未配置协议类型，请先在产品中设置接入协议。
+          </div>
+        </Form>
 
-          <FormItem label="设备描述" name="deviceDescription" v-bind="validateInfos.deviceDescription">
-            <Input v-model:value="modelRef.deviceDescription" />
+        <Divider orientation="left">其他信息</Divider>
+        <Form
+          :label-col="SETUP_FORM_LABEL_COL"
+          :wrapper-col="SETUP_FORM_WRAPPER_COL"
+          class="section-form"
+        >
+          <FormItem label="设备描述" v-bind="validateInfos.deviceDescription">
+            <Input v-model:value="modelRef.deviceDescription" placeholder="请输入设备描述" />
           </FormItem>
-          <FormItem label="备注" name="remark" v-bind="validateInfos.remark">
-            <Textarea v-model:value="modelRef.remark" placeholder="请输入备注" :maxlength="200" :rows="3" showCount />
+          <FormItem label="备注" v-bind="validateInfos.remark">
+            <Textarea
+              v-model:value="modelRef.remark"
+              placeholder="请输入备注"
+              :maxlength="200"
+              :rows="3"
+              showCount
+            />
           </FormItem>
         </Form>
-      </Spin>
-    </div>
-  </BasicModal>
+      </div>
+    </Spin>
+  </BasicDrawer>
 </template>
 
 <script lang="ts" setup>
-import {computed, onMounted, reactive} from 'vue';
-import {BasicModal, useModalInner} from '@/components/Modal';
+import { computed, reactive } from 'vue';
+import { BasicDrawer, useDrawerInner } from '@/components/Drawer';
 import {
-  Alert, Button, Col, Divider, Form, FormItem, Input, InputNumber, Row, Select, Spin, Switch, Textarea, Tooltip,
+  Alert, Col, Divider, Form, FormItem, Input, InputNumber, Row, Select, Spin, Switch, Textarea, Tooltip,
 } from 'ant-design-vue';
-import {DeleteOutlined, PlusOutlined} from '@ant-design/icons-vue';
-import {useMessage} from '@/hooks/web/useMessage';
-import {getDeviceProfiles} from '@/api/device/product';
-import {saveDevices, updateDevices} from '@/api/device/devices';
+import { Button } from '@/components/Button';
+import { useMessage } from '@/hooks/web/useMessage';
+import { getDeviceProfiles } from '@/api/device/product';
+import { getDevicesInfo, saveDevices, updateDevices } from '@/api/device/devices';
+import { SETUP_FORM_LABEL_COL, SETUP_FORM_WRAPPER_COL } from '@/views/node/utils/constants';
 
-const {createMessage} = useMessage();
+defineOptions({ name: 'DeviceDrawer' });
+
+const { createMessage } = useMessage();
 const InputPassword = Input.Password;
 
-const state = reactive<any>({
-  productList: [],
-  record: null,
-  productType: true,
+const PRODUCT_TYPE_LABELS: Record<string, string> = {
+  COMMON: '直连设备',
+  GATEWAY: '网关设备',
+  SUBSET: '网关子设备',
+  VIDEO_COMMON: '视频设备',
+};
+
+const state = reactive({
+  productList: [] as any[],
+  isEdit: false,
   editLoading: false,
+  lockProduct: false,
 });
 
-const modelRef = reactive<any>({
-  id: '',
-  clientId: '',
-  deviceSn: '',
-  appId: '',
-  deviceName: '',
-  productIdentification: '',
-  deviceDescription: '',
-  ipAddress: '',
-  extension: '',
-  remark: '',
-});
+function createEmptyModel() {
+  return {
+    id: '' as string | number,
+    clientId: '',
+    deviceSn: '',
+    appId: '',
+    deviceName: '',
+    deviceIdentification: '',
+    deviceType: '',
+    productIdentification: '',
+    deviceDescription: '',
+    ipAddress: '',
+    extension: '',
+    remark: '',
+  };
+}
 
+const modelRef = reactive(createEmptyModel());
 const protocolConfig = reactive<any>(createProtocolConfig(''));
-const selectedProduct = computed(() => state.productList.find(
-  (item: any) => item.value === modelRef.productIdentification,
-));
+
+const selectedProduct = computed(() =>
+  state.productList.find((item: any) => item.value === modelRef.productIdentification),
+);
 const selectedProtocol = computed(() => selectedProduct.value?.protocolType || '');
 const protocolLabels: Record<string, string> = {
   MQTT: 'MQTT', HTTP: 'HTTP', TCP: 'TCP', MODBUS_TCP: 'Modbus TCP', OPCUA: 'OPC UA',
 };
 const selectedProtocolLabel = computed(() => protocolLabels[selectedProtocol.value] || selectedProtocol.value);
-const getTitle = computed(() => (state.productType ? '新增设备' : '编辑设备'));
+const deviceTypeLabel = computed(() =>
+  PRODUCT_TYPE_LABELS[modelRef.deviceType] || modelRef.deviceType || '-',
+);
+const getTitle = computed(() => (state.isEdit ? '编辑设备' : '新增设备'));
 
 const modbusFunctionOptions = [
-  {label: '保持寄存器', value: 'HOLDING_REGISTER'},
-  {label: '输入寄存器', value: 'INPUT_REGISTER'},
-  {label: '线圈', value: 'COIL'},
-  {label: '离散输入', value: 'DISCRETE_INPUT'},
+  { label: '保持寄存器', value: 'HOLDING_REGISTER' },
+  { label: '输入寄存器', value: 'INPUT_REGISTER' },
+  { label: '线圈', value: 'COIL' },
+  { label: '离散输入', value: 'DISCRETE_INPUT' },
 ];
 const modbusDataTypeOptions = ['INT16', 'UINT16', 'INT32', 'UINT32', 'FLOAT32', 'INT64', 'FLOAT64']
-  .map((value) => ({label: value, value}));
+  .map((value) => ({ label: value, value }));
 const opcUaDataTypeOptions = ['AUTO', 'BOOLEAN', 'INT32', 'INT64', 'FLOAT', 'DOUBLE', 'STRING']
-  .map((value) => ({label: value, value}));
+  .map((value) => ({ label: value, value }));
 
-onMounted(initProductList);
+const emits = defineEmits(['success', 'register']);
 
-async function initProductList() {
-  const record = await getDeviceProfiles({page: 1, pageSize: 100});
-  const list = record?.data || [];
+const rulesRef = reactive({
+  deviceSn: [{ required: true, message: '请输入设备SN', trigger: ['change'] }],
+  appId: [{ required: true, message: '请输入应用场景', trigger: ['change'] }],
+  deviceName: [{ required: true, message: '请输入设备名称', trigger: ['change'] }],
+  productIdentification: [{ required: true, message: '请选择所属产品', trigger: ['change'] }],
+});
+const { validate, resetFields, validateInfos } = Form.useForm(modelRef, rulesRef);
+
+const [register, { closeDrawer }] = useDrawerInner(async (data) => {
+  const { isEdit, record, lockProduct, productIdentification, appId } = data || {};
+  state.isEdit = !!isEdit || !!record?.id;
+  state.lockProduct = !!lockProduct || state.isEdit;
+
+  await ensureProductList();
+
+  if (state.isEdit && record?.id) {
+    await loadDeviceForEdit(record.id);
+  } else {
+    resetModel();
+    state.lockProduct = !!lockProduct;
+    if (productIdentification) {
+      modelRef.productIdentification = productIdentification;
+      if (appId) {
+        modelRef.appId = appId;
+      }
+      handleProductChange();
+    }
+  }
+});
+
+async function ensureProductList() {
+  if (state.productList.length) return;
+  const res = await getDeviceProfiles({ pageNum: 1, pageSize: 500 });
+  const list = res?.data || [];
   state.productList = list.map((item: any) => ({
     ...item,
     value: item.productIdentification,
     label: `${item.productName} · ${item.protocolType || '未配置协议'}`,
   }));
-  if (state.record) loadProtocolConfig(state.record);
+}
+
+function filterProductOption(input: string, option: any) {
+  return (option?.label || '').toLowerCase().includes(input.toLowerCase());
 }
 
 function createProtocolConfig(type: string) {
@@ -251,7 +367,13 @@ function replaceProtocolConfig(config: Record<string, any>) {
 }
 
 function handleProductChange() {
-  replaceProtocolConfig(createProtocolConfig(selectedProtocol.value));
+  const product = selectedProduct.value;
+  if (product?.appId) {
+    modelRef.appId = product.appId;
+  }
+  if (!state.isEdit) {
+    replaceProtocolConfig(createProtocolConfig(selectedProtocol.value));
+  }
 }
 
 function addModbusPoint() {
@@ -262,38 +384,16 @@ function addModbusPoint() {
 }
 
 function addOpcUaPoint() {
-  protocolConfig.points.push({identifier: '', nodeId: '', dataType: 'AUTO', writable: false});
+  protocolConfig.points.push({ identifier: '', nodeId: '', dataType: 'AUTO', writable: false });
 }
 
 function removePoint(index: number) {
   protocolConfig.points.splice(index, 1);
 }
 
-const [register, {closeModal}] = useModalInner((data) => {
-  state.productType = data.type;
-  if (data.type) {
-    resetModel();
-  } else {
-    productEdit(data.record);
-  }
-});
-
-const emits = defineEmits(['success']);
-const rulesRef = reactive({
-  deviceSn: [{required: true, message: '请输入设备SN', trigger: ['change']}],
-  appId: [{required: true, message: '请输入应用场景', trigger: ['change']}],
-  deviceName: [{required: true, message: '请输入设备名称', trigger: ['change']}],
-  productIdentification: [{required: true, message: '请选择所属产品', trigger: ['change']}],
-});
-const {validate, resetFields, validateInfos} = Form.useForm(modelRef, rulesRef);
-
 function resetModel() {
-  Object.assign(modelRef, {
-    id: '', clientId: '', deviceSn: '', appId: '', deviceName: '', productIdentification: '',
-    deviceDescription: '', ipAddress: '', extension: '', remark: '',
-  });
+  Object.assign(modelRef, createEmptyModel());
   replaceProtocolConfig(createProtocolConfig(''));
-  state.record = null;
   resetFields();
 }
 
@@ -311,14 +411,18 @@ function loadProtocolConfig(record: any) {
   });
 }
 
-function productEdit(record: any) {
-  state.editLoading = true;
+async function loadDeviceForEdit(id: number | string) {
   try {
-    Object.keys(modelRef).forEach((item) => {
-      modelRef[item] = record?.[item] ?? '';
+    state.editLoading = true;
+    const info: any = await getDevicesInfo(id);
+    const device = info?.device || {};
+    Object.keys(modelRef).forEach((key) => {
+      modelRef[key] = device[key] ?? '';
     });
-    state.record = record;
-    loadProtocolConfig(record);
+    loadProtocolConfig(device);
+  } catch (error) {
+    console.error(error);
+    createMessage.error('加载设备信息失败');
   } finally {
     state.editLoading = false;
   }
@@ -326,6 +430,7 @@ function productEdit(record: any) {
 
 function handleCancel() {
   resetModel();
+  closeDrawer();
 }
 
 function validateProtocolConfig() {
@@ -350,10 +455,12 @@ function validateProtocolConfig() {
   return true;
 }
 
-function handleOk() {
-  validate().then(() => {
+async function handleOk() {
+  try {
+    await validate();
     if (!validateProtocolConfig()) return;
-    const payload: any = {...modelRef};
+
+    const payload: any = { ...modelRef };
     let extension: any = {};
     try {
       extension = modelRef.extension ? JSON.parse(modelRef.extension) : {};
@@ -361,7 +468,7 @@ function handleOk() {
       extension = {};
     }
     if (['MODBUS_TCP', 'OPCUA'].includes(selectedProtocol.value)) {
-      extension.protocolConfig = {...protocolConfig, type: selectedProtocol.value};
+      extension.protocolConfig = { ...protocolConfig, type: selectedProtocol.value };
       payload.extension = JSON.stringify(extension);
       if (selectedProtocol.value === 'MODBUS_TCP') payload.ipAddress = protocolConfig.host;
     } else {
@@ -371,26 +478,31 @@ function handleOk() {
 
     state.editLoading = true;
     const api = modelRef.id ? updateDevices : saveDevices;
-    api(payload)
-      .then(() => {
-        createMessage.success('操作成功');
-        closeModal();
-        resetModel();
-        emits('success');
-      })
-      .finally(() => {
-        state.editLoading = false;
-      });
-  }).catch((err) => {
-    if (!err?.errorFields) createMessage.error('操作失败');
-  });
+    await api(payload);
+    createMessage.success('操作成功');
+    closeDrawer();
+    resetModel();
+    emits('success');
+  } catch (err: any) {
+    if (!err?.errorFields) {
+      createMessage.error(err?.message || '操作失败');
+    }
+  } finally {
+    state.editLoading = false;
+  }
 }
 </script>
 
 <style lang="less" scoped>
-.device-modal {
-  :deep(.ant-form-item-label > label::after) {
-    content: '';
+.device-drawer-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.section-form {
+  :deep(.ant-form-item) {
+    margin-bottom: 16px;
   }
 
   :deep(.ant-input-number) {
@@ -423,5 +535,22 @@ function handleOk() {
 
 .opcua-point-row {
   grid-template-columns: 1fr 1.8fr 100px 40px 32px;
+}
+
+.form-hint {
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.footer-buttons {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+
+.w-full {
+  width: 100%;
 }
 </style>

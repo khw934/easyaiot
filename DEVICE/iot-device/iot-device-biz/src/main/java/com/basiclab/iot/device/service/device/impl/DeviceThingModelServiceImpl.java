@@ -18,15 +18,19 @@ import com.basiclab.iot.tdengine.RemoteTdEngineService;
 import com.basiclab.iot.tdengine.constant.SuperTableTypeConstant;
 import com.basiclab.iot.tdengine.domain.DeviceData;
 import com.basiclab.iot.tdengine.domain.query.TDDeviceDataRequest;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.compress.utils.Lists;
 import org.springframework.stereotype.Service;
 import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
 
 import javax.annotation.Resource;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
@@ -36,6 +40,7 @@ import java.util.stream.Collectors;
  * @email andywebjava@163.com
  * @wechat EasyAIoT2025
  */
+@Slf4j
 @Service
 public class DeviceThingModelServiceImpl implements DeviceThingModelService {
 
@@ -53,40 +58,72 @@ public class DeviceThingModelServiceImpl implements DeviceThingModelService {
     public List<TDDeviceDataResp> getDeviceThingModels(Long id, String name) {
         //先查产品物模型
         Device device = deviceService.selectDeviceById(id);
+        if (device == null) {
+            return Lists.newArrayList();
+        }
         Product product = productService.selectByProductIdentification(device.getProductIdentification());
+        if (product == null) {
+            return Lists.newArrayList();
+        }
         ProductProperties productProperties = new ProductProperties();
         productProperties.setTemplateIdentification(product.getTemplateIdentification());
         productProperties.setProductIdentification(product.getProductIdentification());
-        productProperties.setPropertyCode(name);
-        productProperties.setPropertyName(name);
+        // 仅搜索时按键/名称过滤；未传 name 时不要把 null 写进条件对象
+        if (StringUtils.hasText(name)) {
+            productProperties.setPropertyCode(name);
+            productProperties.setPropertyName(name);
+        }
         List<ProductProperties> productPropertiesList = productPropertiesService.selectProductPropertiesList(productProperties);
         if (productPropertiesList.isEmpty()) {
             return Lists.newArrayList();
         }
         List<TDDeviceDataResp> result = BeanUtil.copyToList(productPropertiesList, TDDeviceDataResp.class);
         List<String> propertyCode = result.stream().map(TDDeviceDataResp::getPropertyCode).collect(Collectors.toList());
-        // 从 TDengine 取最近一条属性上报（整包 params JSON）
+
+        JSONObject params = null;
+        long ts = 0L;
+
+        // 1) 优先从 TDengine 取最近有效属性上报（整包 params/data JSON）
         TDDeviceDataRequest request = new TDDeviceDataRequest();
-        request.setDeviceIdentification(sanitizeTableSuffix(device.getDeviceIdentification()));
+        request.setDeviceIdentification(device.getDeviceIdentification());
         request.setIdentifierList(propertyCode);
         request.setFunctionType(FunctionTypeConstant.PROPERTIES);
         request.setTdDatabaseName(TdengineConstant.IOT_DEVICE);
         request.setTdSuperTableName(SuperTableTypeConstant.PROPERTY_UPSTREAM_REPORT);
-        List<DeviceData> deviceData = new ArrayList<>();
-        R<List<DeviceData>> lastRowsListByIdentifier = tdEngineService.getLastRowsListByIdentifier(request);
-        if (lastRowsListByIdentifier != null && lastRowsListByIdentifier.getData() != null) {
-            deviceData = lastRowsListByIdentifier.getData();
+        try {
+            R<List<DeviceData>> lastRowsResp = tdEngineService.getLastRowsListByIdentifier(request);
+            if (lastRowsResp != null && lastRowsResp.isSuccess() && !CollectionUtils.isEmpty(lastRowsResp.getData())) {
+                for (DeviceData row : lastRowsResp.getData()) {
+                    JSONObject parsed = parseParams(row.getDataValue());
+                    if (isUsableParams(parsed, propertyCode)) {
+                        params = parsed;
+                        ts = row.getLastUpdateTime();
+                        break;
+                    }
+                }
+            } else if (lastRowsResp != null && !lastRowsResp.isSuccess()) {
+                log.warn("查询设备运行状态 TDengine 失败, deviceId={}, msg={}", id, lastRowsResp.getMsg());
+            }
+        } catch (Exception e) {
+            log.warn("查询设备运行状态 TDengine 异常, deviceId={}: {}", id, e.getMessage());
         }
-        if (!CollectionUtils.isEmpty(deviceData)) {
-            DeviceData latest = deviceData.get(0);
-            JSONObject params = parseParams(latest.getDataValue());
-            long ts = latest.getLastUpdateTime();
+
+        // 2) TDengine 不可用或最新行无有效 params 时，回退 PostgreSQL 设备影子（上行时已写入）
+        if (params == null) {
+            ShadowSnapshot shadow = loadShadowParams(device);
+            if (shadow != null && isUsableParams(shadow.params, propertyCode)) {
+                params = shadow.params;
+                ts = shadow.ts;
+            }
+        }
+
+        if (params != null) {
             for (TDDeviceDataResp resp : result) {
-                if (params != null && params.containsKey(resp.getPropertyCode())) {
+                if (params.containsKey(resp.getPropertyCode())) {
                     Object value = params.get(resp.getPropertyCode());
                     resp.setDataValue(value == null ? null : String.valueOf(value));
                     resp.setTs(ts);
-                } else if (params != null && params.size() == 1 && propertyCode.size() == 1) {
+                } else if (params.size() == 1 && propertyCode.size() == 1) {
                     // 单属性时兼容直接上报标量/数组
                     Object value = params.values().iterator().next();
                     resp.setDataValue(value == null ? null : String.valueOf(value));
@@ -98,12 +135,98 @@ public class DeviceThingModelServiceImpl implements DeviceThingModelService {
         return result;
     }
 
+    private boolean isUsableParams(JSONObject params, List<String> propertyCodes) {
+        if (params == null || params.isEmpty()) {
+            return false;
+        }
+        // 仅有兼容包装键时不算有效运行态
+        if (params.size() == 1 && (params.containsKey("_raw") || params.containsKey("_value"))) {
+            return propertyCodes != null && propertyCodes.size() == 1;
+        }
+        if (CollectionUtils.isEmpty(propertyCodes)) {
+            return true;
+        }
+        for (String code : propertyCodes) {
+            if (params.containsKey(code)) {
+                return true;
+            }
+        }
+        return params.size() == 1 && propertyCodes.size() == 1;
+    }
+
+    private ShadowSnapshot loadShadowParams(Device device) {
+        if (device == null || !StringUtils.hasText(device.getExtension())) {
+            return null;
+        }
+        try {
+            JSONObject extension = JSON.parseObject(device.getExtension());
+            if (extension == null) {
+                return null;
+            }
+            Object shadowObj = extension.get("shadow");
+            JSONObject params = null;
+            if (shadowObj instanceof JSONObject) {
+                params = (JSONObject) shadowObj;
+            } else if (shadowObj instanceof Map) {
+                params = new JSONObject((Map<String, Object>) shadowObj);
+            } else if (shadowObj instanceof String && StringUtils.hasText((String) shadowObj)) {
+                params = parseParams((String) shadowObj);
+            }
+            if (params == null || params.isEmpty()) {
+                return null;
+            }
+            long ts = 0L;
+            Object updateTime = extension.get("shadowUpdateTime");
+            if (updateTime != null) {
+                ts = toEpochMilli(updateTime);
+            }
+            if (ts <= 0 && device.getUpdateTime() != null) {
+                ts = toEpochMilli(device.getUpdateTime());
+            }
+            if (ts <= 0 && device.getLastOnlineTime() != null) {
+                ts = device.getLastOnlineTime().atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
+            }
+            return new ShadowSnapshot(params, ts);
+        } catch (Exception e) {
+            log.debug("解析设备影子失败, deviceId={}: {}", device.getId(), e.getMessage());
+            return null;
+        }
+    }
+
+    private long toEpochMilli(Object value) {
+        if (value == null) {
+            return 0L;
+        }
+        if (value instanceof Number) {
+            return ((Number) value).longValue();
+        }
+        if (value instanceof LocalDateTime) {
+            return ((LocalDateTime) value).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
+        }
+        String text = String.valueOf(value).trim();
+        if (!StringUtils.hasText(text)) {
+            return 0L;
+        }
+        try {
+            return Long.parseLong(text);
+        } catch (NumberFormatException ignored) {
+            // continue
+        }
+        try {
+            return LocalDateTime.parse(text.replace(" ", "T").substring(0, Math.min(text.length(), 19)))
+                    .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
+        } catch (Exception ignored) {
+            return 0L;
+        }
+    }
+
     private JSONObject parseParams(String raw) {
         if (!StringUtils.hasText(raw)) {
             return null;
         }
+        String text = raw.trim();
         try {
-            Object parsed = JSON.parse(raw);
+            Object parsed = JSON.parse(text);
             if (parsed instanceof JSONObject) {
                 return (JSONObject) parsed;
             }
@@ -111,22 +234,60 @@ public class DeviceThingModelServiceImpl implements DeviceThingModelService {
             JSONObject wrap = new JSONObject();
             wrap.put("_value", parsed);
             return wrap;
-        } catch (Exception e) {
+        } catch (Exception ignored) {
+            // 兼容历史脏数据：TDengine 写入时双引号被吃掉，形如 {temperature:1.2,Vbatt:3.7}
+            JSONObject recovered = tryRecoverUnquotedJson(text);
+            if (recovered != null) {
+                return recovered;
+            }
             JSONObject wrap = new JSONObject();
-            wrap.put("_raw", raw);
+            wrap.put("_raw", text);
             return wrap;
         }
     }
 
-    private String sanitizeTableSuffix(String deviceIdentification) {
-        if (!StringUtils.hasText(deviceIdentification)) {
-            return deviceIdentification;
+    /**
+     * 将 {k:v,k2:v2} 宽松解析为 JSONObject（仅用于运行状态展示兼容）。
+     */
+    private JSONObject tryRecoverUnquotedJson(String raw) {
+        if (!raw.startsWith("{") || !raw.endsWith("}")) {
+            return null;
         }
-        String safeId = deviceIdentification.replaceAll("[^A-Za-z0-9_]", "_");
-        if (!safeId.isEmpty() && !Character.isLetter(safeId.charAt(0)) && safeId.charAt(0) != '_') {
-            safeId = "d_" + safeId;
+        try {
+            String body = raw.substring(1, raw.length() - 1).trim();
+            if (!StringUtils.hasText(body)) {
+                return new JSONObject();
+            }
+            JSONObject obj = new JSONObject();
+            for (String part : body.split(",")) {
+                int idx = part.indexOf(':');
+                if (idx <= 0) {
+                    continue;
+                }
+                String key = part.substring(0, idx).trim();
+                String val = part.substring(idx + 1).trim();
+                if ((key.startsWith("\"") && key.endsWith("\"")) || (key.startsWith("'") && key.endsWith("'"))) {
+                    key = key.substring(1, key.length() - 1);
+                }
+                if ((val.startsWith("\"") && val.endsWith("\"")) || (val.startsWith("'") && val.endsWith("'"))) {
+                    val = val.substring(1, val.length() - 1);
+                }
+                obj.put(key, val);
+            }
+            return obj.isEmpty() ? null : obj;
+        } catch (Exception e) {
+            return null;
         }
-        return safeId;
+    }
+
+    private static final class ShadowSnapshot {
+        private final JSONObject params;
+        private final long ts;
+
+        private ShadowSnapshot(JSONObject params, long ts) {
+            this.params = params;
+            this.ts = ts;
+        }
     }
 
 }

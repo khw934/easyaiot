@@ -61,6 +61,24 @@ ensure_platform_agent_after_business_stack() {
     ensure_platform_agent_if_needed || true
 }
 
+ensure_mqtt_demo_after_business_stack() {
+    local demo_dir="${PROJECT_ROOT}/.scripts/mqtt-demo"
+    local starter="${demo_dir}/start_mqtt_demo.sh"
+    if [ "${EASYAIOT_ENABLE_MQTT_DEMO:-1}" = "0" ]; then
+        print_info "跳过 mqtt-demo 自动启动（EASYAIOT_ENABLE_MQTT_DEMO=0）"
+        return 0
+    fi
+    if [ "${EASYAIOT_ENABLE_EMQX:-1}" = "0" ]; then
+        print_info "跳过 mqtt-demo 自动启动（EMQX 未启用）"
+        return 0
+    fi
+    if [ -f "$starter" ]; then
+        chmod +x "$starter" "${demo_dir}/stop_mqtt_demo.sh" 2>/dev/null || true
+        print_info "启动 MQTT 演示设备（01/02/03 并行）..."
+        bash "$starter" || print_warning "mqtt-demo 启动未完全成功，可手动: bash ${starter}"
+    fi
+}
+
 # 业务模块（按依赖顺序：网关/微服务 -> AI/视频 -> 前端）
 ALL_MODULES=(DEVICE AI VIDEO WEB APP)
 
@@ -498,6 +516,7 @@ run_on_modules() {
     case "$cmd" in
         install|start|restart|update)
             ensure_platform_agent_after_business_stack
+            ensure_mqtt_demo_after_business_stack
             ;;
     esac
     return 0

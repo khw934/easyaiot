@@ -152,15 +152,7 @@ public class TdEngineServiceImpl implements TdEngineService {
     public List<DeviceData> getLastRowsListByIdentifier(TDDeviceDataRequest tdDeviceDataRequest) {
         List<DeviceData> list = new ArrayList<>();
         try {
-            if (tdDeviceDataRequest.getDeviceIdentification() != null) {
-                String safeId = tdDeviceDataRequest.getDeviceIdentification().replaceAll("[^A-Za-z0-9_]", "_");
-                if (!safeId.isEmpty()
-                        && !Character.isLetter(safeId.charAt(0))
-                        && safeId.charAt(0) != '_') {
-                    safeId = "d_" + safeId;
-                }
-                tdDeviceDataRequest.setDeviceIdentification(safeId);
-            }
+            // deviceIdentification 用作超级表 TAG，保持原始设备标识（勿做子表名清洗）
             if (tdDeviceDataRequest.getTdSuperTableName() == null
                     || "device_data".equals(tdDeviceDataRequest.getTdSuperTableName())) {
                 tdDeviceDataRequest.setTdSuperTableName(SuperTableTypeConstant.PROPERTY_UPSTREAM_REPORT);
@@ -176,18 +168,8 @@ public class TdEngineServiceImpl implements TdEngineService {
     public List<TDDeviceDataResp> deviceInfoHistoryPage(TDDeviceDataHistoryRequest request) {
         request.setFunctionType(FunctionTypeConstant.PROPERTIES);
         request.setTdDatabaseName(TdengineConstant.IOT_DEVICE);
-        // MQTT 上行属性落在 st_property_upstream_report_{deviceIdentification}
+        // 按超级表 TAG(device_identification) 查询，与 sink 写入 TAG 一致
         request.setTdSuperTableName(SuperTableTypeConstant.PROPERTY_UPSTREAM_REPORT);
-        // 与 sink 写入侧子表命名规则保持一致
-        if (request.getDeviceIdentification() != null) {
-            String safeId = request.getDeviceIdentification().replaceAll("[^A-Za-z0-9_]", "_");
-            if (!safeId.isEmpty()
-                    && !Character.isLetter(safeId.charAt(0))
-                    && safeId.charAt(0) != '_') {
-                safeId = "d_" + safeId;
-            }
-            request.setDeviceIdentification(safeId);
-        }
         try {
             return tdengineMapper.getDeviceHistory(request);
         } catch (Exception e) {
@@ -211,15 +193,7 @@ public class TdEngineServiceImpl implements TdEngineService {
                     request.setSuperTableName(type);
                 }
             }
-            if (request.getDeviceIdentification() != null) {
-                String safeId = request.getDeviceIdentification().replaceAll("[^A-Za-z0-9_]", "_");
-                if (!safeId.isEmpty()
-                        && !Character.isLetter(safeId.charAt(0))
-                        && safeId.charAt(0) != '_') {
-                    safeId = "d_" + safeId;
-                }
-                request.setDeviceIdentification(safeId);
-            }
+            // deviceIdentification 为超级表 TAG，保持原始值
             return tdengineMapper.queryDeviceTimeSeriesData(request);
         } catch (Exception e) {
             log.error("查询设备时序数据异常：deviceIdentification={}, superTableType={}, error={}",

@@ -4,9 +4,9 @@
 
 用法 A（推荐，配合页面）:
   1. 先启动本脚本保持在线监听
-  2. Web → 设备详情 → 服务 →「下发服务」
-  3. 终端应立刻打印收到的下行 MQTT，并自动回复 response
-     （服务调用回执 Topic，便于链路闭环）
+  2. Web → 设备详情 → 设备控制 → 下发属性 / 调用服务
+  3. 终端应立刻打印收到的下行 MQTT，并自动回复 ACK
+     （服务 response / 属性 desired set ack，便于链路闭环）
 
 用法 B（本脚本 HTTP 自动触发下发，无需手点页面）:
   python3 02_downlink_listen.py ... \\
@@ -18,8 +18,11 @@
 
 示例:
   python3 02_downlink_listen.py \\
-    --product YOUR_PRODUCT --device YOUR_DEVICE --tenant-id 1 \\
-    --password YOUR_PRODUCT_PASSWORD
+    --product 9820630576939008 --device 9720084293632004 --tenant-id 1 \\
+    --password 32423
+
+默认 clientId=demo-down-{device}，可与 01/03 对同一设备并行运行。
+一键常驻：bash start_mqtt_demo.sh
 """
 
 from __future__ import annotations
@@ -40,6 +43,7 @@ from common import (
     device_all_filter,
     property_down_filter,
     publish_json,
+    property_desired_set_ack_topic,
     service_down_filter,
     service_response_topic,
 )
@@ -83,7 +87,10 @@ def http_invoke(
 
 
 def main() -> None:
-    parser = build_arg_parser("模拟设备监听下行命令（验证云→设备打通）")
+    parser = build_arg_parser(
+        "模拟设备监听下行命令（验证云→设备打通）",
+        client_id_role="down",
+    )
     parser.add_argument(
         "--auto-reply",
         action="store_true",
@@ -112,6 +119,9 @@ def main() -> None:
     received = {"count": 0}
 
     def on_message(client, userdata, msg):
+        # 订了 /iot/{p}/{d}/# 时会收到上行 echo，忽略以免刷屏
+        if "/upstream/" in msg.topic:
+            return
         received["count"] += 1
         text = msg.payload.decode("utf-8", errors="replace")
         print("=" * 60)
@@ -121,15 +131,36 @@ def main() -> None:
 
         if not auto_reply:
             return
-        if "/service/downstream/invoke/" not in msg.topic:
-            return
 
-        identifier = extract_service_identifier(msg.topic)
         try:
             body = json.loads(text) if text else {}
         except json.JSONDecodeError:
             body = {}
         request_id = body.get("requestId") or body.get("id")
+
+        if "/property/downstream/desired/set" in msg.topic:
+            reply = build_message(
+                tenant_id=args.tenant_id,
+                method="thing.property.set",
+                params=body.get("params") or {},
+                request_id=request_id,
+                data={"success": True, "echo": body.get("params", body)},
+                code=0,
+                msg="demo property set ok",
+            )
+            publish_json(
+                client,
+                property_desired_set_ack_topic(args.product, args.device),
+                reply,
+                qos=args.qos,
+            )
+            print("[ACK] 已回执属性期望设置 desired/set/ack")
+            return
+
+        if "/service/downstream/invoke/" not in msg.topic:
+            return
+
+        identifier = extract_service_identifier(msg.topic)
         reply = build_message(
             tenant_id=args.tenant_id,
             method="thing.service.invoke",
@@ -159,7 +190,7 @@ def main() -> None:
         print(f"[SUB] {t}")
 
     print("=" * 60)
-    print("设备已在线监听下行。请到 Web「服务 → 下发服务」发一条命令。")
+    print("设备已在线监听下行。请到 Web「设备控制」下发属性或服务。")
     print("或使用 --invoke-api --token ... --device-id ... 自动触发。")
     print("Ctrl+C 结束")
     print("=" * 60)

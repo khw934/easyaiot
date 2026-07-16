@@ -1,5 +1,7 @@
 package com.basiclab.iot.device.controller.device;
 
+import cn.hutool.json.JSONObject;
+import cn.hutool.json.JSONUtil;
 import com.basiclab.iot.common.constant.HttpStatus;
 import com.basiclab.iot.common.core.context.TenantContextHolder;
 import com.basiclab.iot.common.domain.TableDataInfo;
@@ -7,6 +9,7 @@ import com.basiclab.iot.common.utils.StringUtils;
 import com.basiclab.iot.device.dal.pgsql.device.DeviceServiceInvokeResponseMapper;
 import com.basiclab.iot.device.domain.device.vo.Device;
 import com.basiclab.iot.device.domain.device.vo.DeviceServiceInvokeResponse;
+import com.basiclab.iot.device.messagebus.ServiceInvokeResponseHandler;
 import com.basiclab.iot.device.service.device.DeviceService;
 import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
@@ -94,22 +97,78 @@ public class DeviceServiceController {
     private Map<String, Object> toView(DeviceServiceInvokeResponse record) {
         Map<String, Object> view = new LinkedHashMap<>();
         view.put("id", record.getId());
-        view.put("serviceName", record.getServiceIdentifier());
-        view.put("serviceIdentification", record.getServiceIdentifier());
+        String identifier = record.getServiceIdentifier();
+        boolean propertySet = "$property.set".equals(identifier)
+                || "thing.property.set".equals(record.getMethod());
+        view.put("serviceName", propertySet ? "属性设置" : identifier);
+        view.put("serviceIdentification", identifier);
+        view.put("kind", propertySet ? "PROPERTY" : "SERVICE");
         view.put("status", toStatus(record.getResponseCode()));
-        Map<String, Object> inputParams = new LinkedHashMap<>();
-        inputParams.put("requestId", record.getRequestId());
-        inputParams.put("method", record.getMethod());
-        inputParams.put("topic", record.getTopic());
-        view.put("inputParams", inputParams);
-        view.put("outputParams", StringUtils.isNotEmpty(record.getResponseData())
-                ? record.getResponseData() : record.getResponseMsg());
+        view.put("requestId", record.getRequestId());
         view.put("createTime", recordTime(record));
+
+        Object inputParams = null;
+        Object outputParams = null;
+        String raw = record.getResponseData();
+        if (StringUtils.isNotEmpty(raw) && JSONUtil.isTypeJSON(raw)) {
+            try {
+                JSONObject obj = JSONUtil.parseObj(raw);
+                if (obj.containsKey("input") || obj.containsKey("output")) {
+                    inputParams = obj.get("input");
+                    outputParams = obj.get("output");
+                } else if (record.getResponseCode() != null
+                        && record.getResponseCode() == ServiceInvokeResponseHandler.PENDING_CODE) {
+                    inputParams = obj;
+                } else {
+                    // 历史 ACK 记录：无 input 包装时，补充 request 元数据，output 用原数据
+                    Map<String, Object> meta = new LinkedHashMap<>();
+                    meta.put("requestId", record.getRequestId());
+                    meta.put("method", record.getMethod());
+                    meta.put("topic", record.getTopic());
+                    inputParams = meta;
+                    outputParams = obj;
+                }
+            } catch (Exception ignored) {
+                // fall through
+            }
+        }
+        if (inputParams == null) {
+            if (record.getResponseCode() != null
+                    && record.getResponseCode() == ServiceInvokeResponseHandler.PENDING_CODE
+                    && StringUtils.isNotEmpty(raw)) {
+                inputParams = raw;
+            } else {
+                Map<String, Object> meta = new LinkedHashMap<>();
+                meta.put("requestId", record.getRequestId());
+                meta.put("method", record.getMethod());
+                meta.put("topic", record.getTopic());
+                if (StringUtils.isNotEmpty(raw)
+                        && (record.getResponseCode() == null
+                        || record.getResponseCode() == ServiceInvokeResponseHandler.PENDING_CODE)) {
+                    meta.put("params", raw);
+                }
+                inputParams = meta;
+            }
+        }
+        if (outputParams == null
+                && (record.getResponseCode() == null
+                || record.getResponseCode() != ServiceInvokeResponseHandler.PENDING_CODE)) {
+            outputParams = StringUtils.isNotEmpty(raw) ? raw : record.getResponseMsg();
+        }
+
+        view.put("inputParams", inputParams);
+        view.put("outputParams", outputParams);
         return view;
     }
 
     private String toStatus(Integer responseCode) {
-        return responseCode == null || responseCode == 0 ? "SUCCESS" : "FAILED";
+        if (responseCode == null) {
+            return "SUCCESS";
+        }
+        if (responseCode == ServiceInvokeResponseHandler.PENDING_CODE) {
+            return "PENDING";
+        }
+        return responseCode == 0 ? "SUCCESS" : "FAILED";
     }
 
     private TableDataInfo tableData(List<?> data, long total) {

@@ -127,6 +127,10 @@ public class DeviceDataStorageService {
                     logEntry.put("userName", extractDeviceIdentification(message));
                     logEntry.put("status", "SUCCESS");
                     logEntry.put("actionData", message.getParams());
+                    logEntry.put("level", extractLogField(message.getParams(), "level", "INFO"));
+                    logEntry.put("content", extractLogField(message.getParams(), "content",
+                            extractLogField(message.getParams(), "message",
+                                    extractLogField(message.getParams(), "log", null))));
                     logEntry.put("createTime", reportTime.toString());
                     int logUpdated = deviceMapper.appendDeviceLog(
                             deviceId, message.getTenantId(), JSONUtil.toJsonStr(logEntry));
@@ -182,6 +186,12 @@ public class DeviceDataStorageService {
      */
     private void storeToTdEngine(IotDeviceMessage message, IotDeviceTopicEnum topicEnum) {
         try {
+            // 属性上报若无 params，写入空行会把「最新一条」冲掉，导致运行状态间歇性无值
+            if (topicEnum == IotDeviceTopicEnum.PROPERTY_UPSTREAM_REPORT && message.getParams() == null) {
+                log.warn("[storeToTdEngine][属性上报 params 为空，跳过 TDEngine 写入，messageId: {}]", message.getId());
+                return;
+            }
+
             // 获取超级表名称
             String superTableName = getSuperTableName(topicEnum);
             if (StrUtil.isBlank(superTableName)) {
@@ -401,6 +411,23 @@ public class DeviceDataStorageService {
     }
 
     /**
+     * 从日志 params 中提取字段；params 非 Map 时返回 defaultValue。
+     */
+    private String extractLogField(Object params, String key, String defaultValue) {
+        if (!(params instanceof Map)) {
+            return defaultValue;
+        }
+        @SuppressWarnings("unchecked")
+        Map<String, Object> map = (Map<String, Object>) params;
+        Object value = map.get(key);
+        if (value == null) {
+            return defaultValue;
+        }
+        String text = String.valueOf(value).trim();
+        return StrUtil.isBlank(text) || "null".equalsIgnoreCase(text) ? defaultValue : text;
+    }
+
+    /**
      * 从Topic中提取identifier（用于事件上报和服务调用）
      *
      * @param topic Topic字符串
@@ -418,7 +445,13 @@ public class DeviceDataStorageService {
     }
 
     private String escapeSqlText(Object value) {
-        return value == null ? null : value.toString().replace("'", "''");
+        if (value == null) {
+            return null;
+        }
+        // 单引号按 SQL 转义；反斜杠先转义，避免 TDengine/REST 路径破坏 JSON
+        return value.toString()
+                .replace("\\", "\\\\")
+                .replace("'", "''");
     }
 }
 

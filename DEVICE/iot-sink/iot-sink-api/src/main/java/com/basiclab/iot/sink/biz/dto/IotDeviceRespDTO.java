@@ -26,7 +26,7 @@ public class IotDeviceRespDTO {
      */
     private String deviceIdentification;
     /**
-     * 协议类型
+     * 协议类型（如 MQTT）
      */
     private String protocolType;
     /**
@@ -41,5 +41,15 @@ public class IotDeviceRespDTO {
      * 租户编号
      */
     private Long tenantId;
+
+    /**
+     * 设备类型：COMMON / GATEWAY / SUBSET / VIDEO_COMMON
+     */
+    private String deviceType;
+
+    /**
+     * 所属网关设备标识（子设备时有值）
+     */
+    private String parentIdentification;
 
 }

@@ -108,12 +108,10 @@ export function getFormConfig(): Partial<FormProps> {
         component: 'ApiSelect',
         componentProps: {
           api: getDeviceProfiles,
-          beforeFetch: () => {
-            return {
-              page: 1,
-              pageSize: 100,
-            };
-          },
+          beforeFetch: () => ({
+            pageNum: 1,
+            pageSize: 500,
+          }),
           resultField: 'data',
           // use name as label
           labelField: 'productName',

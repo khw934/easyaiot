@@ -38,9 +38,10 @@ public class Product implements Serializable {
     private String appId;
 
     /**
-     * 产品模版标识
+     * 产品模版标识（已废弃，产品管理不再使用）
      */
-    @ApiModelProperty(value = "产品模版标识")
+    @ApiModelProperty(value = "产品模版标识（已废弃）", hidden = true)
+    @JsonIgnore
     private String templateIdentification;
 
     /**
@@ -217,7 +218,11 @@ public class Product implements Serializable {
         /**
          * 子设备
          */
-        SUBSET("SUBSET")
+        SUBSET("SUBSET"),
+        /**
+         * 视频设备
+         */
+        VIDEO_COMMON("VIDEO_COMMON")
         ;
 
         private String type;
