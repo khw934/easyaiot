@@ -253,7 +253,8 @@ NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmmirror.com/}"
 APK_MIRROR="${APK_MIRROR:-mirrors.tuna.tsinghua.edu.cn}"
 # AlmaLinux 8 aarch64 在清华源已缺失，YUM 默认走华为云（Dockerfile.arm 还会探测回退）
 YUM_MIRROR_URL="${YUM_MIRROR_URL:-https://mirrors.huaweicloud.com}"
-MAVEN_MIRROR_URL="${MAVEN_MIRROR_URL:-https://mirrors.tuna.tsinghua.edu.cn/repository/maven-public/}"
+# 阿里云：清华 maven-public 对 org.graalvm.* 常缺包（404），会导致 iot-sink-biz 编译失败
+MAVEN_MIRROR_URL="${MAVEN_MIRROR_URL:-https://maven.aliyun.com/repository/public}"
 
 if $NATIVE_SOURCE; then
     APT_MIRROR_URL=""

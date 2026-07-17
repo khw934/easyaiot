@@ -643,12 +643,13 @@ store_module_hashes() {
     printf '%s\n' "$(hash_global_inputs)" > "${MODULE_HASH_DIR}/.global-inputs" 2>/dev/null || true
 }
 
-# 确保宿主机 Maven settings.xml 存在（腾讯云 mirror，可通过 MAVEN_MIRROR_URL 覆盖）；
+# 确保宿主机 Maven settings.xml 存在（阿里云 mirror，可通过 MAVEN_MIRROR_URL 覆盖）；
+# 勿默认用清华 maven-public：其对 org.graalvm.*（iot-sink-biz GraalJS）常 404，导致依赖解析失败并缓存 .lastUpdated。
 # docker run 卷挂载编译时以 -s 引用
 # 注意：如果 settings.xml 已存在但 mirror URL 与当前期望不一致，会重新生成
 ensure_maven_settings() {
     local s="$1"
-    local maven_mirror="${MAVEN_MIRROR_URL:-https://mirrors.tuna.tsinghua.edu.cn/repository/maven-public/}"
+    local maven_mirror="${MAVEN_MIRROR_URL:-https://maven.aliyun.com/repository/public}"
     # 若已存在，检查 mirror URL 是否匹配当前配置
     if [ -f "$s" ]; then
         if grep -qF "${maven_mirror}" "$s" 2>/dev/null; then
@@ -664,9 +665,9 @@ ensure_maven_settings() {
           xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0 http://maven.apache.org/xsd/settings-1.0.0.xsd">
   <mirrors>
     <mirror>
-      <id>tencent-maven</id>
+      <id>aliyun-maven</id>
       <mirrorOf>central,huaweicloud,aliyunmaven,aliyun-plugin</mirrorOf>
-      <name>Tencent Cloud Maven</name>
+      <name>Aliyun Maven</name>
       <url>${maven_mirror}</url>
     </mirror>
   </mirrors>

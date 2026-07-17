@@ -479,85 +479,80 @@ check_docker_compose() {
     _COMPOSE_CHECKED=1
 }
 
-# Docker 镜像源（唯一允许的源，规整后用于比较与写入）
-DOCKER_MIRROR="https://docker.m.daocloud.io/"
+# Docker 镜像源 + DNS（麒麟常因 ::1/127.0.0.53 DNS 导致拉镜像失败）
+DOCKER_MIRROR="${DOCKER_MIRROR:-https://docker.m.daocloud.io/}"
+# shellcheck source=docker_mirror_common.sh
+source "${SCRIPT_DIR}/docker_mirror_common.sh"
 
-# 配置变更后按需重启 Docker（仅服务在运行时）
-restart_docker_if_active() {
-    if systemctl is-active --quiet docker; then
-        print_info "正在重启 Docker 服务以使配置生效..."
-        systemctl daemon-reload
-        systemctl restart docker
-        print_success "Docker 服务已重启"
-    fi
-}
-
-# 配置 Docker 镜像源
-# 优先用 jq（纯进程内 JSON 编辑，无解释器启动开销）；无 jq 退回精简版 python3；
-# 两者皆无时：文件不存在则直写最小配置，已存在则跳过（不敢盲改未知 JSON）。
-configure_docker_mirror() {
-    print_info "配置 Docker 镜像源..."
-
-    local config_file="/etc/docker/daemon.json"
-
-    if [ "$EUID" -ne 0 ]; then
-        print_warning "配置 Docker 镜像源需要 root 权限，跳过此步骤"
-        return 0
-    fi
-    mkdir -p /etc/docker
-
-    # 文件不存在：无需任何 JSON 工具，直接写入最小配置
-    if [ ! -f "$config_file" ]; then
-        printf '{\n  "registry-mirrors": ["%s"]\n}\n' "$DOCKER_MIRROR" > "$config_file"
-        print_success "已写入 Docker 镜像源配置: $DOCKER_MIRROR"
-        restart_docker_if_active
+# 确保 docker-buildx 可用（Docker 26 默认 BuildKit，缺 buildx 时 docker build 直接失败）
+ensure_docker_buildx_plugin() {
+    if docker buildx version >/dev/null 2>&1; then
+        print_success "Docker buildx 已就绪: $(docker buildx version 2>/dev/null | head -1)"
         return 0
     fi
 
-    if check_command jq; then
-        # 已恰为目标镜像源（忽略尾斜杠差异）→ 零写入零重启
-        if jq -e --arg m "${DOCKER_MIRROR%/}" \
-            '(.["registry-mirrors"] // []) | map(rtrimstr("/")) == [$m]' \
-            "$config_file" > /dev/null 2>&1; then
-            print_success "Docker 镜像源配置已就绪（$DOCKER_MIRROR）"
-            return 0
-        fi
-        local tmp_json
-        tmp_json=$(mktemp)
-        if jq --arg m "$DOCKER_MIRROR" '.["registry-mirrors"] = [$m]' "$config_file" > "$tmp_json" 2>/dev/null; then
-            mv "$tmp_json" "$config_file"
-            print_success "Docker 镜像源已更新为 $DOCKER_MIRROR"
-            restart_docker_if_active
-            return 0
-        fi
-        rm -f "$tmp_json"
-        print_error "解析 $config_file 失败（非法 JSON？），请手动检查"
-        return 1
-    fi
+    print_warning "未检测到 docker-buildx（BuildKit 构建需要），尝试安装..."
 
-    if check_command python3; then
-        # 退出码约定：0=已就绪 3=已更新 其它=失败（|| 捕获以兼容 set -e）
-        local rc=0
-        python3 - "$config_file" "$DOCKER_MIRROR" <<'PYEOF' || rc=$?
-import json, sys
-path, mirror = sys.argv[1], sys.argv[2]
-cfg = json.load(open(path))
-cur = [m.rstrip('/') for m in cfg.get('registry-mirrors', []) if isinstance(m, str)]
-if cur == [mirror.rstrip('/')]:
-    sys.exit(0)
-cfg['registry-mirrors'] = [mirror]
-json.dump(cfg, open(path, 'w'), indent=2, ensure_ascii=False)
-sys.exit(3)
-PYEOF
-        case $rc in
-            0) print_success "Docker 镜像源配置已就绪（$DOCKER_MIRROR）" ;;
-            3) print_success "Docker 镜像源已更新为 $DOCKER_MIRROR"; restart_docker_if_active ;;
-            *) print_error "解析 $config_file 失败（非法 JSON？），请手动检查"; return 1 ;;
-        esac
+    local arch
+    arch=$(uname -m)
+    case "$arch" in
+        x86_64|amd64) arch="amd64" ;;
+        aarch64|arm64) arch="arm64" ;;
+        *)
+            print_warning "未知架构 $arch，无法自动安装 buildx"
+            return 1
+            ;;
+    esac
+
+    # 包管理器优先
+    if check_command apt-get; then
+        apt-get install -y -qq docker-buildx-plugin >/dev/null 2>&1 || true
+    elif check_command yum; then
+        yum install -y -q docker-buildx-plugin >/dev/null 2>&1 || true
+    elif check_command dnf; then
+        dnf install -y -q docker-buildx-plugin >/dev/null 2>&1 || true
+    fi
+    if docker buildx version >/dev/null 2>&1; then
+        print_success "已通过包管理器安装 docker-buildx"
         return 0
     fi
 
-    print_warning "未安装 jq/python3 且 $config_file 已存在，跳过自动配置（请手动确认 registry-mirrors 含 $DOCKER_MIRROR）"
+    local ver="${DOCKER_BUILDX_VERSION:-v0.19.3}"
+    local dest_dirs=(
+        "/usr/local/lib/docker/cli-plugins"
+        "/usr/libexec/docker/cli-plugins"
+        "${HOME}/.docker/cli-plugins"
+    )
+    local urls=(
+        "https://github.com/docker/buildx/releases/download/${ver}/buildx-${ver}.linux-${arch}"
+        "https://ghproxy.net/https://github.com/docker/buildx/releases/download/${ver}/buildx-${ver}.linux-${arch}"
+        "https://mirror.ghproxy.com/https://github.com/docker/buildx/releases/download/${ver}/buildx-${ver}.linux-${arch}"
+        "https://ghfast.top/https://github.com/docker/buildx/releases/download/${ver}/buildx-${ver}.linux-${arch}"
+    )
+    local dest url tmpf
+    tmpf=$(mktemp)
+    for dest in "${dest_dirs[@]}"; do
+        mkdir -p "$dest" 2>/dev/null || continue
+        for url in "${urls[@]}"; do
+            print_info "尝试下载 buildx: $url"
+            if curl -fsSL --connect-timeout 15 --max-time 120 "$url" -o "$tmpf" 2>/dev/null \
+                && [ -s "$tmpf" ] && head -c 4 "$tmpf" | grep -q $'\x7fELF'; then
+                install -m 0755 "$tmpf" "${dest}/docker-buildx"
+                rm -f "$tmpf"
+                if docker buildx version >/dev/null 2>&1; then
+                    print_success "已安装 docker-buildx 到 ${dest}/docker-buildx"
+                    return 0
+                fi
+            fi
+        done
+    done
+    rm -f "$tmpf"
+
+    print_error "docker-buildx 安装失败。请手动安装后重试："
+    print_info "  方式1: apt/yum install docker-buildx-plugin"
+    print_info "  方式2: 下载 buildx 二进制到 ~/.docker/cli-plugins/docker-buildx 并 chmod +x"
+    print_info "  参考: https://docs.docker.com/go/buildx/"
+    return 1
 }
 
 # 创建统一网络
@@ -784,6 +779,7 @@ install_linux() {
     check_docker "$@"
     check_docker_compose
     configure_docker_mirror
+    ensure_docker_buildx_plugin || print_warning "buildx 未就绪，后续本地 docker build 可能失败"
     prepare_runtime_environment
     create_network
     

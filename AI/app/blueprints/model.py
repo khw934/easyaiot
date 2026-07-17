@@ -146,7 +146,7 @@ def models():
                 )
             )
 
-        pagination = query.paginate(
+        pagination = query.order_by(Model.created_at.desc()).paginate(
             page=page_no,
             per_page=page_size,
             error_out=False

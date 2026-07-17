@@ -151,6 +151,11 @@ onMounted(() => {
       :deep(.ant-tabs-tabpane) {
         height: 100%;
         overflow: hidden;
+
+        > div {
+          height: 100%;
+          min-height: 0;
+        }
       }
     }
   }
