@@ -135,6 +135,7 @@ Many intelligent IoT projects stall at deployment: <strong>full features won't f
     </ul>
   </li>
   <li><strong>Dataset Annotation and Multi-Format Dataset Management</strong>: Provides a visual image annotation workspace supporting rectangle and polygon labeling, category management, and progress tracking; fully supports flexible import and export of mainstream dataset formats including YOLO, COCO, and ImageFolder, with cloud platform dataset integration enabling one-click import and synchronized export of cloud-hosted datasets—seamlessly connecting data collection, annotation, training, and deployment across the full pipeline</li>
+  <li><strong>Multi-GPU Training, Checkpoint Resume, and Node-Side Deployment</strong>: Breaks through the training bottlenecks of “GPUs available but unused, tasks hard to control, and progress lost on interruption” by systematically connecting multi-GPU utilization, controllable task scheduling, and node-side deployment—so on-site GPUs are truly usable and training jobs are truly manageable. The platform automatically discovers and schedules all server GPUs; users can select single- or multi-GPU on the training page instead of being limited to “only one card visible.” It supports common dataset formats and directory layouts, large local dataset uploads, and keeps original data after failed runs for quick retry—greatly reducing data-prep and rework costs. Training progress is fully visible, and jobs can be stopped and resumed—avoiding lost results after interruption or “stop clicked but still spinning in the background.” Local and remote training schedulers also roll back promptly on failure with clear feedback. Front-end GPU selection, resume training, and stop-state display are improved in parallel, and issues such as false failure on model publish, custom preview images being overwritten, models not found by name/version, and dataset sync timeouts/conflicts are fixed—making the train–publish–use loop smoother and more reliable</li>
   <li><strong>Stream Forwarding</strong>: Supports direct viewing of camera real-time feeds without enabling AI analysis functionality. By creating stream forwarding tasks, multiple cameras can be batch-pushed, enabling synchronous viewing of multiple video streams to meet pure video monitoring scenario requirements</li>
   <li><strong>GPU Discovery, Load-Aware Allocation, and Multi-GPU Collaboration</strong>: The platform provides GPU resource discovery and intelligent scheduling: it detects the number of available GPUs and dynamically assigns video encode/decode and algorithm inference work across cards according to per-GPU load, running tasks in parallel where appropriate to raise multi-stream throughput and utilization while keeping the pipeline stable—coordinating frame processing and model inference in multi-GPU deployments</li>
   <li><strong>Smart Transport Selection and Resilient Stream Pull</strong>: On RTSP and similar pull paths, the system can evaluate URL/path and related signals to choose and switch transport-layer modes; camera pulls default to UDP for lower latency. When consecutive frames indicate gray screen, decode errors, or stream collapse (decode stall), RTSP reconnect and link recovery run automatically to limit prolonged artifacts or frozen video</li>
@@ -744,16 +745,52 @@ compensate third parties for damages caused by usage. All EasyAIoT-related resou
   <img src=".image/banner/banner1002.png" alt="Screenshot 16" width="49%">
 </div>
 <div>
-  <img src=".image/banner/banner1137.jpg" alt="Screenshot 1" width="49%" style="margin-right: 10px">
-  <img src=".image/banner/banner1138.jpg" alt="Screenshot 1" width="49%">
+  <img src=".image/banner/banner1149.jpg" alt="Screenshot 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/banner1150.jpg" alt="Screenshot 1" width="49%">
 </div>
 <div>
-  <img src=".image/banner/banner1139.jpg" alt="Screenshot 1" width="49%" style="margin-right: 10px">
-  <img src=".image/banner/banner1140.jpg" alt="Screenshot 1" width="49%">
+  <img src=".image/banner/banner1151.jpg" alt="Screenshot 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/banner1152.jpg" alt="Screenshot 1" width="49%">
 </div>
 <div>
-  <img src=".image/banner/banner1141.jpg" alt="Screenshot 1" width="49%" style="margin-right: 10px">
-  <img src=".image/banner/banner1142.jpg" alt="Screenshot 1" width="49%">
+  <img src=".image/banner/banner1153.jpg" alt="Screenshot 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/banner1154.jpg" alt="Screenshot 1" width="49%">
+</div>
+<div>
+  <img src=".image/banner/banner1155.jpg" alt="Screenshot 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/banner1156.jpg" alt="Screenshot 1" width="49%">
+</div>
+<div>
+  <img src=".image/banner/banner1157.jpg" alt="Screenshot 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/banner1158.jpg" alt="Screenshot 1" width="49%">
+</div>
+<div>
+  <img src=".image/banner/banner1159.jpg" alt="Screenshot 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/banner1160.jpg" alt="Screenshot 1" width="49%">
+</div>
+<div>
+  <img src=".image/banner/banner1161.jpg" alt="Screenshot 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/banner1162.jpg" alt="Screenshot 1" width="49%">
+</div>
+<div>
+  <img src=".image/banner/banner1163.jpg" alt="Screenshot 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/banner1164.jpg" alt="Screenshot 1" width="49%">
+</div>
+<div>
+  <img src=".image/banner/app/app_1000.jpg" alt="Screenshot 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/app/app_1001.jpg" alt="Screenshot 1" width="49%">
+</div>
+<div>
+  <img src=".image/banner/app/app_1002.jpg" alt="Screenshot 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/app/app_1003.jpg" alt="Screenshot 1" width="49%">
+</div>
+<div>
+  <img src=".image/banner/app/app_1004.jpg" alt="Screenshot 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/app/app_1005.jpg" alt="Screenshot 1" width="49%">
+</div>
+<div>
+  <img src=".image/banner/app/app_1006.jpg" alt="Screenshot 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/app/app_1007.jpg" alt="Screenshot 1" width="49%">
 </div>
 
 ## 📞 Contact Information

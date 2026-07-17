@@ -135,6 +135,7 @@ EasyAIoT — это интеллектуальная платформа Инте
     </ul>
   </li>
   <li><strong>Аннотирование наборов данных и управление в нескольких форматах</strong>: Предоставляет визуальную рабочую среду для аннотирования изображений с поддержкой прямоугольников и полигонов, управления категориями и отслеживания прогресса; полностью поддерживает гибкий импорт и экспорт распространённых форматов наборов данных, включая YOLO, COCO и ImageFolder, с интеграцией облачных наборов данных — импорт в один клик и синхронизированный экспорт — обеспечивая непрерывность полного цикла: сбор данных, аннотирование, обучение и развёртывание.</li>
+  <li><strong>Многокарточное обучение, возобновление с контрольной точки и развёртывание на стороне узла</strong>: Устраняет узкие места обучения — «GPU есть, но не используются; задачи сложно контролировать; при прерывании результаты теряются» — системно связывая многокарточное использование вычислительных ресурсов, управляемое планирование задач и развёртывание на стороне узла, чтобы полевые GPU действительно задействовались, а задачи обучения действительно контролировались. Платформа автоматически обнаруживает и планирует все GPU сервера; пользователь на странице обучения может выбрать одну или несколько карт, больше не ограничиваясь ситуацией «видна только одна карта». Поддерживаются распространённые форматы и структуры каталогов наборов данных, загрузка больших локальных наборов; после сбоя обучения исходные данные сохраняются для быстрого повтора — существенно снижая затраты на подготовку данных и повторные попытки. Прогресс обучения полностью виден, задачи можно останавливать и возобновлять — избегая потери результатов после прерывания и ситуации «нажата остановка, а процесс всё ещё крутится в фоне». Локальные и удалённые планировщики при сбое также своевременно откатываются и дают понятную обратную связь. Параллельно улучшены выбор GPU, продолжение обучения и отображение статуса остановки во фронтенде, исправлены ложные сбои публикации модели, перезапись пользовательских превью, невозможность найти модель по имени/версии, а также таймауты и конфликты синхронизации наборов данных — делая цикл «обучение — публикация — использование» более гладким и надёжным.</li>
   <li><strong>Переадресация потоков</strong>: Поддерживает прямой просмотр видео с камер в реальном времени без включения функций AI-анализа. Путем создания задач переадресации потоков можно выполнять пакетную переадресацию нескольких камер, обеспечивая синхронный просмотр нескольких видеопотоков для удовлетворения потребностей сценариев чистого видеомониторинга.</li>
   <li><strong>Обнаружение GPU, распределение по нагрузке и многокарточная координация</strong>: Платформа обнаруживает доступные GPU и интеллектуально распределяет кодирование/декодирование видео и алгоритмический вывод с учётом текущей нагрузки на каждую карту, выполняя задачи параллельно на нескольких GPU там, где это уместно, повышая пропускную способность мультипотоковой обработки и утилизацию вычислений при сохранении устойчивости и согласованной работы конвейера кадров и вывода моделей.</li>
   <li><strong>Умный выбор транспорта и устойчивый приём потока</strong>: На путях приёма RTSP и аналогичных система может по URL, пути и сопутствующим признакам выбирать и переключать транспортный протокол; по умолчанию приём с камер использует UDP для снижения задержки. При серых кадрах подряд, ошибках декодирования или «обрушении» потока (зависании декодирования) автоматически выполняется переподключение RTSP и восстановление канала, ограничивая длительные артефакты и зависание картинки.</li>
@@ -745,16 +746,52 @@ EasyAIoT — это проект с открытым исходным кодом
   <img src=".image/banner/banner1002.png" alt="Screenshot 16" width="49%">
 </div>
 <div>
-  <img src=".image/banner/banner1137.jpg" alt="Screenshot 1" width="49%" style="margin-right: 10px">
-  <img src=".image/banner/banner1138.jpg" alt="Screenshot 1" width="49%">
+  <img src=".image/banner/banner1149.jpg" alt="Screenshot 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/banner1150.jpg" alt="Screenshot 1" width="49%">
 </div>
 <div>
-  <img src=".image/banner/banner1139.jpg" alt="Screenshot 1" width="49%" style="margin-right: 10px">
-  <img src=".image/banner/banner1140.jpg" alt="Screenshot 1" width="49%">
+  <img src=".image/banner/banner1151.jpg" alt="Screenshot 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/banner1152.jpg" alt="Screenshot 1" width="49%">
 </div>
 <div>
-  <img src=".image/banner/banner1141.jpg" alt="Screenshot 1" width="49%" style="margin-right: 10px">
-  <img src=".image/banner/banner1142.jpg" alt="Screenshot 1" width="49%">
+  <img src=".image/banner/banner1153.jpg" alt="Screenshot 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/banner1154.jpg" alt="Screenshot 1" width="49%">
+</div>
+<div>
+  <img src=".image/banner/banner1155.jpg" alt="Screenshot 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/banner1156.jpg" alt="Screenshot 1" width="49%">
+</div>
+<div>
+  <img src=".image/banner/banner1157.jpg" alt="Screenshot 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/banner1158.jpg" alt="Screenshot 1" width="49%">
+</div>
+<div>
+  <img src=".image/banner/banner1159.jpg" alt="Screenshot 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/banner1160.jpg" alt="Screenshot 1" width="49%">
+</div>
+<div>
+  <img src=".image/banner/banner1161.jpg" alt="Screenshot 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/banner1162.jpg" alt="Screenshot 1" width="49%">
+</div>
+<div>
+  <img src=".image/banner/banner1163.jpg" alt="Screenshot 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/banner1164.jpg" alt="Screenshot 1" width="49%">
+</div>
+<div>
+  <img src=".image/banner/app/app_1000.jpg" alt="Screenshot 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/app/app_1001.jpg" alt="Screenshot 1" width="49%">
+</div>
+<div>
+  <img src=".image/banner/app/app_1002.jpg" alt="Screenshot 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/app/app_1003.jpg" alt="Screenshot 1" width="49%">
+</div>
+<div>
+  <img src=".image/banner/app/app_1004.jpg" alt="Screenshot 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/app/app_1005.jpg" alt="Screenshot 1" width="49%">
+</div>
+<div>
+  <img src=".image/banner/app/app_1006.jpg" alt="Screenshot 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/app/app_1007.jpg" alt="Screenshot 1" width="49%">
 </div>
 
 ## 🛠️ Поддержка сервиса

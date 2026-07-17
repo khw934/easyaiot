@@ -135,6 +135,7 @@ Beaucoup de projets IoT intelligents butent au déploiement : <strong>les foncti
     </ul>
   </li>
   <li><strong>Annotation de jeux de données et gestion multi-formats</strong> : Fournit un espace de travail d'annotation d'images visuel, prenant en charge l'annotation par rectangles et polygones, la gestion des catégories et le suivi de progression ; prend en charge l'importation et l'exportation flexibles des formats de jeux de données courants (YOLO, COCO, ImageFolder, etc.), avec intégration aux jeux de données sur plateforme cloud pour l'importation en un clic et l'exportation synchronisée, assurant la continuité du pipeline complet : collecte de données, annotation, entraînement et déploiement.</li>
+  <li><strong>Entraînement multi-GPU, reprise depuis point de contrôle et déploiement côté nœud</strong> : Surmonte les goulots d'étranglement de l'entraînement — « GPU présents mais inutilisés, tâches difficilement maîtrisables, résultats perdus en cas d'interruption » — en reliant de façon systémique l'exploitation multi-GPU, l'ordonnancement contrôlable des tâches et le déploiement côté nœud, pour que la puissance GPU sur site soit réellement exploitable et que les jobs d'entraînement soient réellement maîtrisables. La plateforme détecte et planifie automatiquement l'ensemble des GPU serveur ; l'utilisateur peut choisir une ou plusieurs cartes sur la page d'entraînement, sans être limité à « une seule carte visible ». Compatible avec de nombreux formats et structures de jeux de données courants, elle prend en charge le téléversement de jeux locaux volumineux et conserve les données d'origine après un échec pour une nouvelle tentative rapide, réduisant nettement le coût de préparation et de reprise. La progression est entièrement visible, les tâches peuvent être arrêtées et reprises — évitant la perte de résultats après interruption ou le cas « arrêt demandé mais processus toujours actif en arrière-plan ». Les ordonnanceurs locaux et distants se rétractent aussi rapidement en cas d'échec avec un retour clair. L'interface améliore en parallèle la sélection GPU, la reprise d'entraînement et l'affichage de l'état d'arrêt, et corrige les faux échecs de publication de modèle, l'écrasement des aperçus personnalisés, l'impossibilité de retrouver un modèle par nom/version, ainsi que les timeouts et conflits de synchronisation des jeux de données — pour une boucle « entraîner — publier — utiliser » plus fluide et fiable.</li>
   <li><strong>Redirection de flux</strong> : Prend en charge la visualisation directe des flux vidéo en temps réel des caméras sans activer les fonctionnalités d'analyse IA. En créant des tâches de redirection de flux, plusieurs caméras peuvent être redirigées par lots, permettant la visualisation synchrone de plusieurs flux vidéo pour répondre aux besoins des scénarios de surveillance vidéo pure.</li>
   <li><strong>Détection GPU, répartition de charge et coopération multi-GPU</strong> : La plateforme détecte les GPU disponibles et alloue intelligemment l'encodage/décodage vidéo et l'inférence algorithmique selon la charge en temps réel de chaque carte, avec exécution parallèle sur plusieurs GPU lorsque c'est pertinent, afin d'augmenter le débit multi-flux et l'utilisation des ressources tout en préservant la stabilité et la coordination encodage–inférence en configuration multi-cartes.</li>
   <li><strong>Transport intelligent et tirage de flux hautement fiable</strong> : Sur les chemins RTSP et assimilés, le système peut sélectionner et basculer dynamiquement le protocole de transport (couche transport) à partir de l'URL, du chemin et de signaux associés ; par défaut, le tirage depuis les caméras utilise UDP pour réduire la latence. En cas d'écrans gris consécutifs, d'erreurs de décodage ou d'effondrement du flux (blocage du décodage), une reconnexion RTSP et une restauration de liaison sont déclenchées automatiquement afin de limiter artefacts prolongés ou gel d'image.</li>
@@ -745,16 +746,52 @@ EasyAIoT est un projet d'apprentissage open source, sans lien avec des activité
   <img src=".image/banner/banner1002.png" alt="Capture d'écran 16" width="49%">
 </div>
 <div>
-  <img src=".image/banner/banner1137.jpg" alt="Capture d'écran 1" width="49%" style="margin-right: 10px">
-  <img src=".image/banner/banner1138.jpg" alt="Capture d'écran 1" width="49%">
+  <img src=".image/banner/banner1149.jpg" alt="Capture d'écran 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/banner1150.jpg" alt="Capture d'écran 1" width="49%">
 </div>
 <div>
-  <img src=".image/banner/banner1139.jpg" alt="Capture d'écran 1" width="49%" style="margin-right: 10px">
-  <img src=".image/banner/banner1140.jpg" alt="Capture d'écran 1" width="49%">
+  <img src=".image/banner/banner1151.jpg" alt="Capture d'écran 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/banner1152.jpg" alt="Capture d'écran 1" width="49%">
 </div>
 <div>
-  <img src=".image/banner/banner1141.jpg" alt="Capture d'écran 1" width="49%" style="margin-right: 10px">
-  <img src=".image/banner/banner1142.jpg" alt="Capture d'écran 1" width="49%">
+  <img src=".image/banner/banner1153.jpg" alt="Capture d'écran 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/banner1154.jpg" alt="Capture d'écran 1" width="49%">
+</div>
+<div>
+  <img src=".image/banner/banner1155.jpg" alt="Capture d'écran 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/banner1156.jpg" alt="Capture d'écran 1" width="49%">
+</div>
+<div>
+  <img src=".image/banner/banner1157.jpg" alt="Capture d'écran 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/banner1158.jpg" alt="Capture d'écran 1" width="49%">
+</div>
+<div>
+  <img src=".image/banner/banner1159.jpg" alt="Capture d'écran 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/banner1160.jpg" alt="Capture d'écran 1" width="49%">
+</div>
+<div>
+  <img src=".image/banner/banner1161.jpg" alt="Capture d'écran 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/banner1162.jpg" alt="Capture d'écran 1" width="49%">
+</div>
+<div>
+  <img src=".image/banner/banner1163.jpg" alt="Capture d'écran 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/banner1164.jpg" alt="Capture d'écran 1" width="49%">
+</div>
+<div>
+  <img src=".image/banner/app/app_1000.jpg" alt="Capture d'écran 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/app/app_1001.jpg" alt="Capture d'écran 1" width="49%">
+</div>
+<div>
+  <img src=".image/banner/app/app_1002.jpg" alt="Capture d'écran 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/app/app_1003.jpg" alt="Capture d'écran 1" width="49%">
+</div>
+<div>
+  <img src=".image/banner/app/app_1004.jpg" alt="Capture d'écran 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/app/app_1005.jpg" alt="Capture d'écran 1" width="49%">
+</div>
+<div>
+  <img src=".image/banner/app/app_1006.jpg" alt="Capture d'écran 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/app/app_1007.jpg" alt="Capture d'écran 1" width="49%">
 </div>
 
 ## 🛠️ Support de service
