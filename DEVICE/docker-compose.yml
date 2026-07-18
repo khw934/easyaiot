@@ -369,12 +369,17 @@ services:
       # 算法侧须挂载同一宿主机目录且设置 ALERT_IMAGES_DIR=/app/alert_images（见 VIDEO/app/utils/alert_images_paths.py）
       # 注意：使用相对路径，从DEVICE目录指向VIDEO目录下的alert_images
       - ../VIDEO/alert_images:/app/alert_images
+      # full 形态工业协议演示：宿主机 /tmp 虚拟串口 + pts（.scripts/modbus-rtu-virtual-serial）
+      - /tmp:/tmp
+      - /dev/pts:/dev/pts
       # - /data/skywalking/skywalking-agent:/data/skywalking/skywalking-agent
     # 配置hosts映射，将kafka-server映射到宿主机IP
     # 使用host-gateway自动解析为宿主机IP（Docker 20.10+支持）
     # 如果host-gateway不工作，可以手动指定IP，例如：- "kafka-server:192.168.1.100"
+    # host.docker.internal：Sink 访问宿主机 Modbus TCP(5020) / OPC UA(4840) 演示从站
     extra_hosts:
       - "kafka-server:host-gateway"
+      - "host.docker.internal:host-gateway"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:48092/actuator/health"]
       interval: 30s
