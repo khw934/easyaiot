@@ -185,6 +185,10 @@ Many projects reduce IoT to a “device ledger + message relay”—devices conn
   <li><strong>Device Basic Profile</strong>: If replacement, accountability, and reconciliation rely on verbal “who is this,” the responsibility chain breaks. Persist name, identifier, SN, product, version, IP, and other one-device-one-record fields—open the profile to confirm identity, with less verbal chasing and on-site digging</li>
   <li><strong>Device Access Guide</strong>: If field integration still means hunting thick docs and asking experts, go-live stretches endlessly. Per device type: recommended commands, integration parameters, auth, messages, and acceptance notes; copy commands after parameter edits—integration becomes copy-command acceptance, and go-live/PoC pace tightens</li>
   <li><strong>Real-Time Running Status</strong>: If operators must log into devices and parse raw payloads every time to judge metrics, duty cost stays high. Spread current property live values by thing model, with table/card views and refresh—judge key metrics at a glance without logging into devices or reading raw messages</li>
+  <li><strong>Sensor Float Data Prediction</strong>: If key metrics can only be reviewed after the fact on historical curves, anomalies often stay invisible until they have already crossed the line. The platform forecasts trends for sensor float properties, turning past readings into forward-looking trajectories—ops upgrades from “looking at numbers after the fact” to “seeing ahead,” buying time to act</li>
+  <li><strong>Running-Status Property Thresholds</strong>: If health boundaries live only in code or oral agreements, every new model or scenario means rework. Configure upper/lower thresholds for running-status properties by thing model—boundaries become definable, reusable, and fine-grained, turning each device’s “normal range” into a governable asset instead of scattered tribal knowledge</li>
+  <li><strong>Threshold Alarms & Threshold Rules</strong>: Thresholds are decoration if crossings go unnoticed or cannot be linked. Out-of-bound metrics trigger alerts automatically and can drive rule-based actions—“know when crossed, manage when known,” closing health boundaries into an operable loop</li>
+  <li><strong>Central-Device Associated Sub-Device One-Screen Control</strong>: If subordinate health must be checked device by device, inspection and incident response always lag. From the central-device view, survey associated sub-device running status on one screen—no device-by-device switching, faster field inspection and anomaly localization, so the device side truly closes the loop of “see the numbers, govern the bounds, raise the alerts, and grasp the whole picture”</li>
   <li><strong>Device Shadow Comparison</strong>: Classic troubleshooting pain is not knowing whether “desired” matches “actual.” View reported state, desired state, and diffs side by side, with full JSON retained—troubleshooting shifts from guessing to comparing, and consistency is obvious at a glance</li>
   <li><strong>Desired Property Push</strong>: Driving to site just to change one parameter is classic scale-out waste. Batch-edit desired values for writable properties and push in one click; track processing/success/failure—remote tuning has receipts, no truck roll for a parameter change, fewer wasted trips</li>
   <li><strong>Thing Model Service Invocation</strong>: If start/stop or reset cannot confirm execution after issue, disposal falls back to verbal accounting. Fill parameters for published services and invoke; track command receipts—actions confirm whether they executed, disposal is auditable, and “we said we controlled it” upgrades to a closed loop with receipts</li>
@@ -832,6 +836,30 @@ compensate third parties for damages caused by usage. All EasyAIoT-related resou
   <img src=".image/banner/banner1172.jpg" alt="Screenshot 1" width="49%">
 </div>
 <div>
+  <img src=".image/banner/banner1173.jpg" alt="Screenshot 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/banner1174.jpg" alt="Screenshot 1" width="49%">
+</div>
+<div>
+  <img src=".image/banner/banner1175.jpg" alt="Screenshot 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/banner1176.jpg" alt="Screenshot 1" width="49%">
+</div>
+<div>
+  <img src=".image/banner/banner1177.jpg" alt="Screenshot 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/banner1178.jpg" alt="Screenshot 1" width="49%">
+</div>
+<div>
+  <img src=".image/banner/banner1179.jpg" alt="Screenshot 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/banner1180.jpg" alt="Screenshot 1" width="49%">
+</div>
+<div>
+  <img src=".image/banner/banner1181.jpg" alt="Screenshot 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/banner1182.jpg" alt="Screenshot 1" width="49%">
+</div>
+<div>
+  <img src=".image/banner/banner1183.jpg" alt="Screenshot 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/banner1184.jpg" alt="Screenshot 1" width="49%">
+</div>
+<div>
   <img src=".image/banner/app/app_1000.jpg" alt="Screenshot 1" width="49%" style="margin-right: 10px">
   <img src=".image/banner/app/app_1001.jpg" alt="Screenshot 1" width="49%">
 </div>
@@ -1004,11 +1032,15 @@ The following are outstanding contributors who have made significant contributio
 <td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;"><nobr>空空</nobr></td>
 <td style="padding: 15px; border: 1px solid #e0e0e0; color: #444; line-height: 1.8;">To advance EasyAIoT in camera direct-connect from “discoverable” to “production-ready,” closed critical gaps in authentication, channel sync, config changes, and multi-vendor stream URLs so the platform is deliverable on real NVR / multi-vendor sites: made device login credentials reliable so username/password auth works and direct-connect devices can truly “log in and stay managed”; rebuilt the post-NVR-sync pull model—previously sync wrote each channel camera’s own IP as the RTSP host, which badly mismatched the real “pull via NVR” topology, so sync looked successful while live play failed; after the fix, channel RTSP URLs are generated from the NVR host IP so batch-synced streams play and scale; fixed device edit save failures so access parameters remain maintainable instead of “write once, never change again”; built an RTSP URL rule library for common domestic camera brands and opened custom brand rules so heterogeneous devices can assemble stream URLs in one click without manual address trials or platform code changes per brand—moving direct-connect from “devices can be scanned” to “login works, sync is accurate, configs can be changed, and multi-brand streams play,” laying a solid foundation for later PTZ and zoom controls.</td>
 </tr>
+<tr style="background-color: #f8f9fa;">
+<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;"><nobr>狗娃</nobr></td>
+<td style="padding: 15px; border: 1px solid #e0e0e0; color: #444; line-height: 1.8;">To advance EasyAIoT in device status awareness, threshold governance, and central-device operations visualization, delivered a closed loop of “predict → bound → alert → rule → one-screen control”: contributed sensor float data prediction, upper/lower thresholds for running-status properties, threshold alarms with rule linkage, and one-screen running-status views for central-device associated sub-devices—so the device side can “see the numbers, govern the bounds, raise the alerts, and grasp the whole picture.”</td>
+</tr>
 </tbody>
 </table>
 
 <p style="font-size: 14px; line-height: 1.8; color: #2c3e50; font-weight: 500; margin: 20px 0; padding: 15px; background-color: #e8f4f8; border-left: 4px solid #3498db; border-radius: 4px;">
-<strong>Special Thanks</strong>: The work of the above contributors has advanced EasyAIoT in many ways, including cross-platform deployment documentation and scripts, delivery of national-standard video capabilities (including GB28181), AI integration testing, multi-GPU training usability and checkpoint resume, multi-vendor camera direct discovery and batch onboarding, production-ready Tianditu spatial visualization, heterogeneous streaming media cluster deployment and scheduling architecture, production-ready license plate recognition algorithm and complete implementation, EasyAIoT-Edge end-to-end integration linking camera access with AI, campus developer community organization and youth collaborative ecosystem building, IoT device uplink/downlink closed loop and DJI FlightHub aerial view integration, Modbus-TCP / Modbus-RTU / OPC UA industrial protocol access, and the closed loop of camera direct-connect from discovery through login/sync/config/multi-brand streaming. Their professionalism and selfless dedication are worthy of our learning and respect. Once again, we express our most sincere gratitude to these outstanding contributors! 🙏
+<strong>Special Thanks</strong>: The work of the above contributors has advanced EasyAIoT in many ways, including cross-platform deployment documentation and scripts, delivery of national-standard video capabilities (including GB28181), AI integration testing, multi-GPU training usability and checkpoint resume, multi-vendor camera direct discovery and batch onboarding, production-ready Tianditu spatial visualization, heterogeneous streaming media cluster deployment and scheduling architecture, production-ready license plate recognition algorithm and complete implementation, EasyAIoT-Edge end-to-end integration linking camera access with AI, campus developer community organization and youth collaborative ecosystem building, IoT device uplink/downlink closed loop and DJI FlightHub aerial view integration, Modbus-TCP / Modbus-RTU / OPC UA industrial protocol access, the closed loop of camera direct-connect from discovery through login/sync/config/multi-brand streaming, and sensor floating-point data prediction with threshold alarm rules plus one-screen running-status views for central-device associated sub-devices. Their professionalism and selfless dedication are worthy of our learning and respect. Once again, we express our most sincere gratitude to these outstanding contributors! 🙏
 </p>
 
 ## 💝 Open Source Guardians
@@ -1369,6 +1401,7 @@ Thanks to the following contributors for code, feedback, donations, and support 
         <td align="center" valign="top" width="11.11%"><a href="javascript:void(0)" target="_blank"><img src="./.image/sponsor/嘎嗝.jpg" width="80px;" alt="嘎嗝"/><br /><sub><b>嘎嗝</b></sub></a></td>
         <td align="center" valign="top" width="11.11%"><a href="javascript:void(0)" target="_blank"><img src="./.image/sponsor/曹.jpg" width="80px;" alt="曹"/><br /><sub><b>曹</b></sub></a></td>
         <td align="center" valign="top" width="11.11%"><a href="javascript:void(0)" target="_blank"><img src="./.image/sponsor/滔滔.jpg" width="80px;" alt="滔滔"/><br /><sub><b>滔滔</b></sub></a></td>
+        <td align="center" valign="top" width="11.11%"><a href="javascript:void(0)" target="_blank"><img src="./.image/sponsor/狗娃.jpg" width="80px;" alt="狗娃"/><br /><sub><b>狗娃</b></sub></a></td>
     </tr>
   </tbody>
 </table>

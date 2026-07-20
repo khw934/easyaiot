@@ -9,7 +9,8 @@
 #      仅 COPY 本机编译产物 + 拉取目标架构的 base image 完成镜像包装。
 #      ★ 跨架构构建若 Dockerfile 含 RUN 步骤，宿主机需 QEMU/binfmt（脚本会自动安装）。
 #      纯 Java JAR、纯前端 dist 等仅 COPY 的层不依赖 QEMU；含 yum/apt/pnpm 等 RUN 的层需要。
-#   3. 打标签并推送到远程仓库。
+#   3. 打标签并推送到远程仓库；推送成功后立即删除本地镜像，避免磁盘占用。
+#      WEB 本机镜像在删除前会先提取 dist，供跨架构构建复用。
 #
 # 推荐入口（交互式，无需参数，默认 full）:
 #   bash .scripts/docker/install_linux.sh pull|build-runtime
@@ -534,12 +535,53 @@ ensure_docker_disk_space() {
 # ============================================================================
 # 镜像 tag & push 公共函数
 # ============================================================================
+
+# 推送成功后删除本地镜像（local + remote tag），避免 build-runtime 串行构建时磁盘被逐步占满
+cleanup_local_after_push() {
+    local local_ref="$1"
+    local remote_ref="${2:-}"
+    print_info "推送完成，删除本地镜像以释放磁盘..."
+    if [ -n "$remote_ref" ] && [ "$remote_ref" != "$local_ref" ]; then
+        docker rmi "$remote_ref" 2>/dev/null || true
+    fi
+    if docker rmi "$local_ref" 2>/dev/null; then
+        print_success "已删除本地镜像: ${local_ref}"
+    else
+        # 可能仍有其他 tag 指向同一 image id，或镜像本就不存在
+        print_warning "未能删除 ${local_ref}（可能仍有其他标签引用或不存在）"
+    fi
+}
+
+# WEB 本机镜像在推送删除前提取 dist，供后续跨架构构建复用
+extract_web_dist_before_cleanup() {
+    local lref="$1" profile="$2"
+    local dst="${PROJECT_ROOT}/WEB/dist-prebuilt-${profile}"
+    if [ -d "$dst" ]; then
+        print_info "WEB dist 已存在，跳过提取: ${dst}/"
+        return 0
+    fi
+    if ! docker image inspect "$lref" >/dev/null 2>&1; then
+        print_warning "WEB 镜像不存在，无法提取 dist: ${lref}"
+        return 0
+    fi
+    print_info "提取 WEB dist 供跨架构复用: ${lref} → ${dst}/"
+    rm -rf "$dst" 2>/dev/null || true
+    local cid
+    cid=$(docker create "$lref" 2>/dev/null) || true
+    if [ -n "$cid" ]; then
+        docker cp "${cid}:/usr/share/nginx/html/." "$dst/" 2>/dev/null || \
+            print_warning "提取 dist 失败（非致命），跨架构 WEB 将回退到完整 vite build"
+        docker rm "$cid" >/dev/null 2>&1
+    fi
+}
+
 tag_and_push() {
     local local_ref="$1" remote_ref="$2"
     print_info "打标签: ${local_ref} → ${remote_ref}"
     docker tag "$local_ref" "$remote_ref" || { print_error "打标签失败"; return 1; }
 
     local arch_suffix="${remote_ref##*:}"
+    local pushed=false
 
     # ★ 推送策略：
     #   - 带架构后缀（:amd64/:arm64/:arm32）：始终推送，manifest create 需从远程读取
@@ -558,15 +600,22 @@ tag_and_push() {
                 return 1
             fi
             print_success "推送成功: ${remote_ref}"
+            pushed=true
             ;;
         *)
             if $DO_PUSH; then
                 print_info "推送: ${remote_ref}"
                 runtime_docker_push_with_retry "$remote_ref" || { print_error "推送失败: ${remote_ref}"; return 1; }
                 print_success "推送成功: ${remote_ref}"
+                pushed=true
             fi
             ;;
     esac
+
+    # ★ 推送成功即删本地镜像，避免多模块/多架构串行构建占满磁盘
+    if $pushed; then
+        cleanup_local_after_push "$local_ref" "$remote_ref"
+    fi
     return 0
 }
 
@@ -922,8 +971,19 @@ _build_push_track() {
         fail_label="构建/推送失败: ${rname} [${target_arch}]"
     fi
     print_step "$step_label"
-    if build_single_module "$rname" "$lref" "$target_arch" && tag_and_push "$lref" "$rref"; then
-        print_success "本地镜像已就绪: ${lref}"
+    if ! build_single_module "$rname" "$lref" "$target_arch"; then
+        print_error "$fail_label"
+        failed_all=$((failed_all + 1))
+        return 1
+    fi
+    # WEB 本机构建且还需跨架构：推送（会删本地镜像）前先提取 dist
+    if [ "$lname" = "web-service" ] && [ -n "$profile" ] && is_native_arch "$target_arch"; then
+        if declare -p cross_archs >/dev/null 2>&1 && [ ${#cross_archs[@]} -gt 0 ]; then
+            extract_web_dist_before_cleanup "$lref" "$profile"
+        fi
+    fi
+    if tag_and_push "$lref" "$rref"; then
+        print_success "已推送并清理本地镜像: ${rref}"
         _MANIFEST_ARCH_REFS["$mref"]="${_MANIFEST_ARCH_REFS["$mref"]:+${_MANIFEST_ARCH_REFS["$mref"]} }${rref}"
         success_all=$((success_all + 1))
         return 0
@@ -1242,24 +1302,17 @@ build_all_modules() {
             done
         fi
 
-        # 提取 WEB dist 供后续跨架构复用
+        # WEB dist 已在各形态推送前按需提取（推送后本地镜像会删除），此处仅作兜底提示
         if runtime_build_includes_module WEB && is_native_arch "$target_arch" && [ ${#cross_archs[@]} -gt 0 ]; then
-            echo ""
-            print_info "提取 ${target_arch} WEB dist 供跨架构复用 ..."
+            local _missing_dist=0
             for profile in "${build_profiles[@]}"; do
-                local img_ref; img_ref=$(local_ref "web-service" "$profile")
-                if docker image inspect "$img_ref" >/dev/null 2>&1; then
-                    local dst="${PROJECT_ROOT}/WEB/dist-prebuilt-${profile}"
-                    print_info "  → ${img_ref} → ${dst}/"
-                    rm -rf "$dst" 2>/dev/null || true
-                    local cid; cid=$(docker create "$img_ref" 2>/dev/null)
-                    if [ -n "$cid" ]; then
-                        docker cp "${cid}:/usr/share/nginx/html/." "$dst/" 2>/dev/null || \
-                            print_warning "提取 dist 失败（非致命），跨架构 WEB 将回退到完整 vite build"
-                        docker rm "$cid" >/dev/null 2>&1
-                    fi
+                if [ ! -d "${PROJECT_ROOT}/WEB/dist-prebuilt-${profile}" ]; then
+                    _missing_dist=$((_missing_dist + 1))
                 fi
             done
+            if [ "$_missing_dist" -gt 0 ]; then
+                print_warning "有 ${_missing_dist} 个 WEB 形态缺少预构建 dist，跨架构 WEB 可能回退到完整 vite build"
+            fi
         fi
 
         echo ""

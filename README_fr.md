@@ -185,6 +185,10 @@ Beaucoup de projets réduisent l'IoT à un « registre d'appareils + relais de m
   <li><strong>Fiche d'informations de base</strong> : Remplacement, responsabilité et rapprochement qui reposent sur un « qui est-ce ? » oral cassent la chaîne de responsabilité. Nom, identifiant, SN, produit, version, IP et autres champs un-appareil-une-fiche — ouvrir la fiche confirme l'identité ; moins de confirmation orale et de chasse sur site</li>
   <li><strong>Guide d'accès appareil</strong> : Si l'intégration terrain reste une chasse aux gros documents et aux experts, le cycle de mise en service s'allonge. Par type : commandes recommandées, paramètres d'intégration, auth, messages et notes d'acceptance ; commandes copiables après modification des paramètres — l'intégration passe de la doc à l'acceptance par copie de commandes ; go-live et PoC plus serrés</li>
   <li><strong>État d'exécution en temps réel</strong> : Si la garde doit se connecter à l'appareil et lire les trames brutes pour juger un point, le coût de surveillance explose. Les valeurs live des propriétés s'étalent selon le modèle d'objet ; vues tableau/carte et actualisation — sans se connecter ni lire le brut, juger d'un coup d'œil si les points clés sont normaux maintenant</li>
+  <li><strong>Prédiction de données flottantes des capteurs</strong> : Si les points clés ne se consultent qu'a posteriori sur des courbes historiques, les anomalies restent souvent invisibles jusqu'au franchissement. La plateforme prédit les tendances des propriétés flottantes des capteurs, transformant les lectures passées en trajectoires anticipées — l'exploitation passe de « regarder les chiffres après coup » à « anticiper », pour gagner du temps d'action</li>
+  <li><strong>Seuils des attributs d'état d'exécution</strong> : Si les frontières de santé vivent dans le code ou des accords oraux, chaque nouveau modèle ou scénario impose une reprise. Configurer des seuils haut/bas des attributs d'état selon le modèle d'objet — frontières définissables, réutilisables et affinables ; la « plage normale » de l'appareil devient un actif gouvernable, plus un savoir tribal dispersé</li>
+  <li><strong>Alertes et règles de seuil</strong> : Des seuils sans alerte ni liaison ne sont que décoratifs. Le dépassement déclenche automatiquement une alerte et peut alimenter des règles d'action — « savoir dès le franchissement, pouvoir agir dès qu'on sait », pour boucler les frontières de santé en exploitation</li>
+  <li><strong>Maîtrise sur un écran des sous-appareils liés à l'équipement central</strong> : Si la santé des subordonnés se consulte appareil par appareil, inspection et réponse aux incidents retardent toujours. Depuis l'équipement central, parcourir d'un coup d'œil l'état d'exécution des sous-appareils liés — sans bascule appareil par appareil ; inspection terrain et localisation d'anomalies nettement plus rapides, pour que le côté équipements boucle vraiment « voir les chiffres, gouverner les bornes, lever les alertes et saisir le global »</li>
   <li><strong>Comparaison d'ombre d'appareil</strong> : Le pire du diagnostic classique est de ne pas distinguer « ce qu'on veut » et « ce qui est ». État reporté, état désiré et écarts côte à côte, JSON complet conservé — le diagnostic passe du guesswork à la comparaison ; cohérence désir/réel d'un coup d'œil</li>
   <li><strong>Envoi des propriétés désirées</strong> : Se déplacer pour un seul paramètre est le gaspillage typique de l'ops à l'échelle. Modifier en lot les valeurs désirées des propriétés écrites et pousser en un clic ; suivre en cours/succès/échec — réglages à distance avec accusé de réception ; plus de déplacement pour un paramètre, moins de sorties inutiles</li>
   <li><strong>Invocation de services du modèle d'objet</strong> : Démarrer/arrêter ou reset sans confirmer l'exécution ne laisse que la réconciliation orale. Remplir les paramètres des services publiés et invoquer ; suivre les accusés — après l'ordre, confirmer l'exécution ; la disposition devient auditable, du « on a dit que c'était contrôlé » à une boucle avec réception</li>
@@ -833,6 +837,30 @@ EasyAIoT est un projet d'apprentissage open source, sans lien avec des activité
   <img src=".image/banner/banner1172.jpg" alt="Capture d'écran 1" width="49%">
 </div>
 <div>
+  <img src=".image/banner/banner1173.jpg" alt="Capture d'écran 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/banner1174.jpg" alt="Capture d'écran 1" width="49%">
+</div>
+<div>
+  <img src=".image/banner/banner1175.jpg" alt="Capture d'écran 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/banner1176.jpg" alt="Capture d'écran 1" width="49%">
+</div>
+<div>
+  <img src=".image/banner/banner1177.jpg" alt="Capture d'écran 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/banner1178.jpg" alt="Capture d'écran 1" width="49%">
+</div>
+<div>
+  <img src=".image/banner/banner1179.jpg" alt="Capture d'écran 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/banner1180.jpg" alt="Capture d'écran 1" width="49%">
+</div>
+<div>
+  <img src=".image/banner/banner1181.jpg" alt="Capture d'écran 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/banner1182.jpg" alt="Capture d'écran 1" width="49%">
+</div>
+<div>
+  <img src=".image/banner/banner1183.jpg" alt="Capture d'écran 1" width="49%" style="margin-right: 10px">
+  <img src=".image/banner/banner1184.jpg" alt="Capture d'écran 1" width="49%">
+</div>
+<div>
   <img src=".image/banner/app/app_1000.jpg" alt="Capture d'écran 1" width="49%" style="margin-right: 10px">
   <img src=".image/banner/app/app_1001.jpg" alt="Capture d'écran 1" width="49%">
 </div>
@@ -1042,11 +1070,15 @@ Voici les contributeurs exceptionnels qui ont apporté une contribution signific
 <td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;"><nobr>空空</nobr></td>
 <td style="padding: 15px; border: 1px solid #e0e0e0; color: #444; line-height: 1.8;">Pour faire progresser EasyAIoT dans la connexion directe des caméras, de « détectable » à « déployable en production », a comblé les lacunes critiques en authentification, synchronisation des canaux, modification de configuration et flux multi-marques, rendant la plateforme livrable sur des sites NVR / multi-fabricants réels : a rendu fiables les identifiants de connexion afin que l’authentification par compte/mot de passe fonctionne et que les appareils en connexion directe puissent vraiment « se connecter et rester gérés » ; a reconstruit le modèle de tirage de flux après synchronisation NVR — auparavant la synchronisation écrivait l’IP de chaque caméra de canal comme hôte RTSP, en contradiction avec la topologie réelle « tirage centralisé via NVR », d’où une sync apparemment réussie mais un live impossible ; après correction, les URL RTSP des canaux sont générées à partir de l’IP hôte du NVR, rendant les flux synchronisés en masse lisibles et scalables ; a corrigé les échecs d’enregistrement à l’édition d’appareil pour que les paramètres d’accès restent maintenables au lieu d’être « écrits une fois, jamais modifiables » ; a construit une bibliothèque de règles d’URL RTSP pour les marques de vidéosurveillance courantes en Chine et ouvert des règles de marque personnalisées, permettant aux appareils hétérogènes d’assembler les flux en un clic sans essais manuels d’adresses ni modification du code plateforme pour chaque nouvelle marque — faisant passer la connexion directe de « on peut scanner les appareils » à « on se connecte, la sync est exacte, on peut reconfigurer, et les flux multi-marques passent », posant une base solide pour les contrôles PTZ et zoom ultérieurs.</td>
 </tr>
+<tr style="background-color: #f8f9fa;">
+<td style="padding: 15px; border: 1px solid #e0e0e0; font-weight: 600; color: #2c3e50; width: 32%; min-width: 9rem;"><nobr>狗娃</nobr></td>
+<td style="padding: 15px; border: 1px solid #e0e0e0; color: #444; line-height: 1.8;">Pour faire progresser EasyAIoT dans la perception d'état des équipements, la gouvernance des seuils et la visualisation d'exploitation des équipements centraux, a mis en place la boucle fermée « prédire — borner — alerter — régler — maîtriser sur un écran » : a contribué à la prédiction de données flottantes des capteurs, à la configuration des seuils haut/bas des attributs d'état d'exécution, aux alertes et règles de seuil avec liaison, ainsi qu'à l'affichage sur un écran de l'état d'exécution des sous-appareils liés à l'équipement central — pour que le côté équipements puisse « voir les chiffres, gouverner les bornes, lever les alertes et saisir le global ».</td>
+</tr>
 </tbody>
 </table>
 
 <p style="font-size: 14px; line-height: 1.8; color: #2c3e50; font-weight: 500; margin: 20px 0; padding: 15px; background-color: #e8f4f8; border-left: 4px solid #3498db; border-radius: 4px;">
-<strong>Remerciements spéciaux</strong> : Le travail des contributeurs ci-dessus a fait avancer EasyAIoT sur plusieurs fronts, notamment la documentation et les scripts de déploiement multiplateforme, la mise en œuvre des capacités vidéo selon la norme nationale (dont GB28181), les tests d'intégration IA, l'utilisabilité de l'entraînement multi-GPU et de la reprise sur point de contrôle, la découverte directe multi-marques et l'intégration en masse des caméras, la mise en production de la visualisation spatiale Tianditu, l'architecture de déploiement et d'ordonnancement des clusters multimédia hétérogènes, la mise en production de l'algorithme de reconnaissance de plaques et de son implémentation complète, l'intégration de bout en bout EasyAIoT-Edge reliant l'accès caméra et l'IA sur l'edge, l'organisation de la communauté de développeurs sur le campus et la construction d'un écosystème collaboratif pour la jeunesse, la boucle fermée montante/descendante des équipements IoT et l'intégration de la vision aérienne DJI FlightHub, l'accès aux protocoles industriels Modbus-TCP / Modbus-RTU / OPC UA, ainsi que la boucle fermée de connexion directe des caméras de la découverte à la connexion/synchronisation/configuration/flux multi-marques. Leur professionnalisme et leur dévouement méritent notre reconnaissance et notre respect. Encore une fois, nous exprimons notre gratitude la plus sincère à ces contributeurs exceptionnels ! 🙏
+<strong>Remerciements spéciaux</strong> : Le travail des contributeurs ci-dessus a fait avancer EasyAIoT sur plusieurs fronts, notamment la documentation et les scripts de déploiement multiplateforme, la mise en œuvre des capacités vidéo selon la norme nationale (dont GB28181), les tests d'intégration IA, l'utilisabilité de l'entraînement multi-GPU et de la reprise sur point de contrôle, la découverte directe multi-marques et l'intégration en masse des caméras, la mise en production de la visualisation spatiale Tianditu, l'architecture de déploiement et d'ordonnancement des clusters multimédia hétérogènes, la mise en production de l'algorithme de reconnaissance de plaques et de son implémentation complète, l'intégration de bout en bout EasyAIoT-Edge reliant l'accès caméra et l'IA sur l'edge, l'organisation de la communauté de développeurs sur le campus et la construction d'un écosystème collaboratif pour la jeunesse, la boucle fermée montante/descendante des équipements IoT et l'intégration de la vision aérienne DJI FlightHub, l'accès aux protocoles industriels Modbus-TCP / Modbus-RTU / OPC UA, ainsi que la boucle fermée de connexion directe des caméras de la découverte à la connexion/synchronisation/configuration/flux multi-marques, la prédiction de données flottantes des capteurs avec les règles d'alerte de seuil, et l'affichage en un écran de l'état de fonctionnement des sous-équipements associés aux équipements centraux. Leur professionnalisme et leur dévouement méritent notre reconnaissance et notre respect. Encore une fois, nous exprimons notre gratitude la plus sincère à ces contributeurs exceptionnels ! 🙏
 </p>
 
 ## 💝 Gardiens de l'open source
@@ -1407,6 +1439,7 @@ Nous remercions les personnes suivantes pour leur soutien à ce projet, sous for
         <td align="center" valign="top" width="11.11%"><a href="javascript:void(0)" target="_blank"><img src="./.image/sponsor/嘎嗝.jpg" width="80px;" alt="嘎嗝"/><br /><sub><b>嘎嗝</b></sub></a></td>
         <td align="center" valign="top" width="11.11%"><a href="javascript:void(0)" target="_blank"><img src="./.image/sponsor/曹.jpg" width="80px;" alt="曹"/><br /><sub><b>曹</b></sub></a></td>
         <td align="center" valign="top" width="11.11%"><a href="javascript:void(0)" target="_blank"><img src="./.image/sponsor/滔滔.jpg" width="80px;" alt="滔滔"/><br /><sub><b>滔滔</b></sub></a></td>
+        <td align="center" valign="top" width="11.11%"><a href="javascript:void(0)" target="_blank"><img src="./.image/sponsor/狗娃.jpg" width="80px;" alt="狗娃"/><br /><sub><b>狗娃</b></sub></a></td>
     </tr>
   </tbody>
 </table>

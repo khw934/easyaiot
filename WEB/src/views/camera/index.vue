@@ -125,8 +125,6 @@
                   ref="deviceMixedCardListRef"
                   :params="{}"
                   :play-button-title="playButtonTitle"
-                  :selected-keys="checkedKeys"
-                  @toggle-select="onSelectDevice"
                   @view="handleCardView"
                   @edit="handleCardEdit"
                   @delete="handleCardDelete"
@@ -154,17 +152,6 @@
                       <Button preIcon="ant-design:import-outlined" @click="openBatchLocationModal(true)">
                         导入坐标
                       </Button>
-                      <PopConfirmButton
-                        placement="topRight"
-                        type="primary"
-                        color="error"
-                        preIcon="ant-design:delete-outlined"
-                        :disabled="!checkedKeys.length"
-                        :title="`确定批量删除选中的 ${checkedKeys.length} 项？`"
-                        @confirm="handleBatchDelete"
-                      >
-                        批量删除{{ checkedKeys.length ? ` (${checkedKeys.length})` : '' }}
-                      </PopConfirmButton>
                       <Button type="default" @click="handleToggleViewMode">
                         <template #icon><SwapOutlined /></template>
                         切换视图
@@ -362,6 +349,7 @@ function handleToggleViewMode() {
   if (viewMode.value === 'table') {
     reload();
   } else {
+    clearDeviceSelection();
     deviceMixedCardListRef.value?.fetch?.();
   }
 }
