@@ -12,7 +12,7 @@ ENV HUSKY=0
 
 RUN npm config set registry ${NPM_REGISTRY}
 
-RUN npm install -g pnpm@9.15.9 && \
+RUN npm install -g pnpm@11.3.0 && \
     pnpm config set registry ${NPM_REGISTRY} && \
     pnpm config set fetch-timeout 600000 && \
     pnpm config set fetch-retries 5 && \
@@ -28,14 +28,14 @@ RUN --mount=type=cache,target=/pnpm/store,id=visualize-pnpm-store \
     pnpm config set store-dir /pnpm/store && \
     pnpm fetch --frozen-lockfile 2>&1 | tee /tmp/visualize-build-logs/pnpm-fetch.log || true
 
-# pnpm 偶发 "Done" 后不退出（https://github.com/pnpm/pnpm/issues/12297），监督并强制收尾
+# pnpm 11.x 偶发打印 "Done in Xs" 后永不退出（https://github.com/pnpm/pnpm/issues/12297），监督并强制收尾
 RUN --mount=type=cache,target=/pnpm/store,id=visualize-pnpm-store \
     pnpm config set store-dir /pnpm/store && \
     sh -ec '\
       log=/tmp/visualize-build-logs/pnpm-install.log; \
       rcfile=/tmp/pnpm-install.rc; \
       : > "$log"; rm -f "$rcfile"; \
-      setsid sh -c "set -o pipefail; pnpm install --frozen-lockfile --ignore-scripts 2>&1 | tee \"$log\"; echo \$? > \"$rcfile\"" & \
+      setsid sh -c "set -o pipefail; pnpm install --frozen-lockfile 2>&1 | tee \"$log\"; echo \$? > \"$rcfile\"" & \
       pid=$!; \
       hung=0; \
       for i in $(seq 1 1800); do \
