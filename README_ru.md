@@ -557,114 +557,114 @@ EasyAIoT — это проект с открытым исходным кодом
 
 | | | |
 |:---:|:---:|:---:|
-| ![态势](.image/banner/banner1001.png) | ![总览](.image/banner/banner1076.jpg) | ![告警](.image/banner/banner1074.jpg) |
-| ![看板](.image/banner/banner1075.jpg) | ![多维](.image/banner/banner1095.jpg) | ![综合](.image/banner/banner1096.jpg) |
-| ![监控](.image/banner/banner1078.jpg) | ![实时](.image/banner/banner1077.jpg) |  |
+| ![Ситуационная осведомлённость](.image/banner/banner1001.png) | ![Обзор](.image/banner/banner1076.jpg) | ![Тревоги](.image/banner/banner1074.jpg) |
+| ![Панель](.image/banner/banner1075.jpg) | ![Многомерный](.image/banner/banner1095.jpg) | ![Комплексный](.image/banner/banner1096.jpg) |
+| ![Мониторинг](.image/banner/banner1078.jpg) | ![Реальное время](.image/banner/banner1077.jpg) |  |
 
 #### 📺 Визуализация и SCADA
 
 | | | |
 |:---:|:---:|:---:|
-| ![项目](.image/banner/banner1185.png) | ![组态](.image/banner/banner1186.png) | ![编辑](.image/banner/banner1187.png) |
-| ![预览](.image/banner/banner1188.png) | ![组件](.image/banner/banner1189.png) | ![数据源](.image/banner/banner1190.png) |
-| ![发布](.image/banner/banner1191.png) | ![运行](.image/banner/banner1192.png) | ![模板](.image/banner/banner1193.png) |
-| ![资产](.image/banner/banner1194.png) | ![大屏](.image/banner/banner1195.png) | ![展示](.image/banner/banner1196.png) |
+| ![Проект](.image/banner/banner1185.png) | ![SCADA](.image/banner/banner1186.png) | ![Редактор](.image/banner/banner1187.png) |
+| ![Просмотр](.image/banner/banner1188.png) | ![Компоненты](.image/banner/banner1189.png) | ![Источник данных](.image/banner/banner1190.png) |
+| ![Публикация](.image/banner/banner1191.png) | ![Выполнение](.image/banner/banner1192.png) | ![Шаблон](.image/banner/banner1193.png) |
+| ![Активы](.image/banner/banner1194.png) | ![Большой экран](.image/banner/banner1195.png) | ![Отображение](.image/banner/banner1196.png) |
 
 #### 📹 Видеонаблюдение
 
 | | | |
 |:---:|:---:|:---:|
-| ![直播](.image/banner/banner1145.jpg) | ![预览](.image/banner/banner1146.jpg) | ![摄像头](.image/banner/banner1051.jpg) |
-| ![列表](.image/banner/banner1053.jpg) | ![推流](.image/banner/banner1083.jpg) | ![转发](.image/banner/banner1084.jpg) |
-| ![存储](.image/banner/banner1121.png) | ![抓拍](.image/banner/banner1122.png) | ![录像](.image/banner/banner1123.png) |
-| ![配置](.image/banner/banner1124.png) | ![容量](.image/banner/banner1125.png) | ![回放](.image/banner/banner1126.png) |
-| ![抓拍](.image/banner/banner1117.png) | ![文件](.image/banner/banner1118.png) | ![策略](.image/banner/banner1119.png) |
-| ![配额](.image/banner/banner1120.png) | ![图库](.image/banner/banner1057.jpg) | ![归档](.image/banner/banner1058.jpg) |
-| ![监控](.image/banner/banner1068.jpg) | ![统计](.image/banner/banner1069.jpg) | ![地图](.image/banner/banner1113.png) |
-| ![定位](.image/banner/banner1114.png) | ![分布](.image/banner/banner1115.png) | ![点位](.image/banner/banner1116.png) |
-| ![实况](.image/banner/banner1026.jpg) | ![多路](.image/banner/banner1028.jpg) | ![推流](.image/banner/banner1103.png) |
-| ![预览](.image/banner/banner1104.png) | ![接入](.image/banner/banner1105.png) | ![NVR](.image/banner/banner1106.png) |
-| ![实况](.image/banner/banner1183.jpg) | ![地图](.image/banner/banner1184.jpg) |  |
+| ![Прямой эфир](.image/banner/banner1145.jpg) | ![Просмотр](.image/banner/banner1146.jpg) | ![Камера](.image/banner/banner1051.jpg) |
+| ![Список](.image/banner/banner1053.jpg) | ![Пуш-поток](.image/banner/banner1083.jpg) | ![Ретрансляция](.image/banner/banner1084.jpg) |
+| ![Хранилище](.image/banner/banner1121.png) | ![Снимок](.image/banner/banner1122.png) | ![Запись](.image/banner/banner1123.png) |
+| ![Конфигурация](.image/banner/banner1124.png) | ![Ёмкость](.image/banner/banner1125.png) | ![Воспроизведение](.image/banner/banner1126.png) |
+| ![Снимок](.image/banner/banner1117.png) | ![Файлы](.image/banner/banner1118.png) | ![Политика](.image/banner/banner1119.png) |
+| ![Квота](.image/banner/banner1120.png) | ![Галерея](.image/banner/banner1057.jpg) | ![Архив](.image/banner/banner1058.jpg) |
+| ![Мониторинг](.image/banner/banner1068.jpg) | ![Статистика](.image/banner/banner1069.jpg) | ![Карта](.image/banner/banner1113.png) |
+| ![Локация](.image/banner/banner1114.png) | ![Распределение](.image/banner/banner1115.png) | ![Точки](.image/banner/banner1116.png) |
+| ![Живой просмотр](.image/banner/banner1026.jpg) | ![Мультиканал](.image/banner/banner1028.jpg) | ![Пуш-поток](.image/banner/banner1103.png) |
+| ![Просмотр](.image/banner/banner1104.png) | ![Подключение](.image/banner/banner1105.png) | ![NVR](.image/banner/banner1106.png) |
+| ![Живой просмотр](.image/banner/banner1183.jpg) | ![Карта](.image/banner/banner1184.jpg) |  |
 
 #### 🧠 AI-модели
 
 | | | |
 |:---:|:---:|:---:|
-| ![Qwen](.image/banner/banner1093.jpg) | ![视觉模型](.image/banner/banner1094.jpg) | ![列表](.image/banner/banner1099.png) |
-| ![配置](.image/banner/banner1100.png) | ![详情](.image/banner/banner1101.png) | ![调用](.image/banner/banner1102.png) |
-| ![训练](.image/banner/banner1019.jpg) | ![任务](.image/banner/banner1020.jpg) | ![列表](.image/banner/banner1023.jpg) |
-| ![进度](.image/banner/banner1024.jpg) | ![参数](.image/banner/banner1017.jpg) | ![评估](.image/banner/banner1018.jpg) |
-| ![详情](.image/banner/banner1021.jpg) | ![日志](.image/banner/banner1022.jpg) | ![管理](.image/banner/banner1097.png) |
-| ![仓库](.image/banner/banner1098.png) | ![版本](.image/banner/banner1039.jpg) | ![资产](.image/banner/banner1061.jpg) |
-| ![推理](.image/banner/banner1040.jpg) | ![配置](.image/banner/banner1042.jpg) | ![结果](.image/banner/banner1043.jpg) |
-| ![在线](.image/banner/banner1044.jpg) | ![批量](.image/banner/banner1047.jpg) | ![监控](.image/banner/banner1048.jpg) |
-| ![服务](.image/banner/banner1045.jpg) | ![部署](.image/banner/banner1046.jpg) | ![集群](.image/banner/banner1049.jpg) |
-| ![调用](.image/banner/banner1050.jpg) | ![权重](.image/banner/banner1111.png) | ![下载](.image/banner/banner1112.png) |
-| ![姿态](.image/banner/banner1147.jpg) | ![识别](.image/banner/banner1148.jpg) | ![任务](.image/banner/banner1085.jpg) |
-| ![配置](.image/banner/banner1086.jpg) | ![详情](.image/banner/banner1087.jpg) | ![运行](.image/banner/banner1088.jpg) |
-| ![区域](.image/banner/banner1079.jpg) | ![检测框](.image/banner/banner1080.jpg) | ![布防](.image/banner/banner1081.jpg) |
-| ![预览](.image/banner/banner1082.jpg) | ![算法](.image/banner/banner1062.jpg) | ![创建](.image/banner/banner1063.png) |
-| ![画面](.image/banner/banner1064.jpg) | ![分析](.image/banner/banner1065.jpg) | ![结果](.image/banner/banner1066.jpg) |
-| ![回看](.image/banner/banner1067.jpg) | ![实况](.image/banner/banner1052.jpg) | ![智能](.image/banner/banner1054.jpg) |
+| ![Qwen](.image/banner/banner1093.jpg) | ![Модель зрения](.image/banner/banner1094.jpg) | ![Список](.image/banner/banner1099.png) |
+| ![Конфигурация](.image/banner/banner1100.png) | ![Детали](.image/banner/banner1101.png) | ![Вызов](.image/banner/banner1102.png) |
+| ![Обучение](.image/banner/banner1019.jpg) | ![Задача](.image/banner/banner1020.jpg) | ![Список](.image/banner/banner1023.jpg) |
+| ![Прогресс](.image/banner/banner1024.jpg) | ![Параметры](.image/banner/banner1017.jpg) | ![Оценка](.image/banner/banner1018.jpg) |
+| ![Детали](.image/banner/banner1021.jpg) | ![Журналы](.image/banner/banner1022.jpg) | ![Управление](.image/banner/banner1097.png) |
+| ![Репозиторий](.image/banner/banner1098.png) | ![Версия](.image/banner/banner1039.jpg) | ![Активы](.image/banner/banner1061.jpg) |
+| ![Инференс](.image/banner/banner1040.jpg) | ![Конфигурация](.image/banner/banner1042.jpg) | ![Результаты](.image/banner/banner1043.jpg) |
+| ![Онлайн](.image/banner/banner1044.jpg) | ![Пакет](.image/banner/banner1047.jpg) | ![Мониторинг](.image/banner/banner1048.jpg) |
+| ![Сервис](.image/banner/banner1045.jpg) | ![Развёртывание](.image/banner/banner1046.jpg) | ![Кластер](.image/banner/banner1049.jpg) |
+| ![Вызов](.image/banner/banner1050.jpg) | ![Веса](.image/banner/banner1111.png) | ![Загрузка](.image/banner/banner1112.png) |
+| ![Поза](.image/banner/banner1147.jpg) | ![Распознавание](.image/banner/banner1148.jpg) | ![Задача](.image/banner/banner1085.jpg) |
+| ![Конфигурация](.image/banner/banner1086.jpg) | ![Детали](.image/banner/banner1087.jpg) | ![Выполнение](.image/banner/banner1088.jpg) |
+| ![Область](.image/banner/banner1079.jpg) | ![Рамка детекции](.image/banner/banner1080.jpg) | ![Охрана](.image/banner/banner1081.jpg) |
+| ![Просмотр](.image/banner/banner1082.jpg) | ![Алгоритм](.image/banner/banner1062.jpg) | ![Создать](.image/banner/banner1063.png) |
+| ![Кадр](.image/banner/banner1064.jpg) | ![Анализ](.image/banner/banner1065.jpg) | ![Результаты](.image/banner/banner1066.jpg) |
+| ![Повтор](.image/banner/banner1067.jpg) | ![Живой просмотр](.image/banner/banner1052.jpg) | ![Интеллект](.image/banner/banner1054.jpg) |
 
 #### 📦 Наборы данных
 
 | | | |
 |:---:|:---:|:---:|
-| ![管理](.image/banner/banner1015.png) | ![列表](.image/banner/banner1010.jpg) | ![标注](.image/banner/banner1027.png) |
-| ![任务](.image/banner/banner1016.jpg) | ![工具](.image/banner/banner1059.jpg) | ![预览](.image/banner/banner1060.jpg) |
-| ![详情](.image/banner/banner1107.png) | ![导入](.image/banner/banner1108.png) | ![项目](.image/banner/banner1109.png) |
-| ![审核](.image/banner/banner1110.png) | ![创建](.image/banner/banner1007.jpg) | ![样本](.image/banner/banner1008.jpg) |
+| ![Управление](.image/banner/banner1015.png) | ![Список](.image/banner/banner1010.jpg) | ![Разметка](.image/banner/banner1027.png) |
+| ![Задача](.image/banner/banner1016.jpg) | ![Инструменты](.image/banner/banner1059.jpg) | ![Просмотр](.image/banner/banner1060.jpg) |
+| ![Детали](.image/banner/banner1107.png) | ![Импорт](.image/banner/banner1108.png) | ![Проект](.image/banner/banner1109.png) |
+| ![Проверка](.image/banner/banner1110.png) | ![Создать](.image/banner/banner1007.jpg) | ![Образцы](.image/banner/banner1008.jpg) |
 
 #### 🔌 IoT
 
 | | | |
 |:---:|:---:|:---:|
-| ![物模型](.image/banner/banner1149.jpg) | ![定义](.image/banner/banner1150.jpg) | ![产品](.image/banner/banner1151.jpg) |
-| ![详情](.image/banner/banner1152.jpg) | ![设备](.image/banner/banner1153.jpg) | ![详情](.image/banner/banner1154.jpg) |
-| ![状态](.image/banner/banner1155.jpg) | ![属性](.image/banner/banner1156.jpg) | ![服务](.image/banner/banner1157.jpg) |
-| ![事件](.image/banner/banner1158.jpg) | ![影子](.image/banner/banner1159.jpg) | ![拓扑](.image/banner/banner1160.jpg) |
-| ![子设备](.image/banner/banner1161.jpg) | ![分组](.image/banner/banner1162.jpg) | ![控制](.image/banner/banner1163.jpg) |
-| ![遥测](.image/banner/banner1164.jpg) | ![历史](.image/banner/banner1165.jpg) | ![协议](.image/banner/banner1166.jpg) |
-| ![连接](.image/banner/banner1167.jpg) | ![认证](.image/banner/banner1168.jpg) | ![调试](.image/banner/banner1169.jpg) |
-| ![功能](.image/banner/banner1170.jpg) | ![读写](.image/banner/banner1171.jpg) | ![服务](.image/banner/banner1172.jpg) |
-| ![订阅](.image/banner/banner1173.jpg) | ![日志](.image/banner/banner1174.jpg) | ![在线](.image/banner/banner1175.jpg) |
-| ![统计](.image/banner/banner1176.jpg) | ![总览](.image/banner/banner1177.jpg) | ![看板](.image/banner/banner1178.jpg) |
-| ![产品](.image/banner/banner1006.jpg) | ![设备](.image/banner/banner1009.jpg) | ![OTA](.image/banner/banner1179.jpg) |
-| ![固件](.image/banner/banner1180.jpg) | ![任务](.image/banner/banner1181.jpg) | ![进度](.image/banner/banner1182.jpg) |
-| ![规则](.image/banner/banner1013.jpg) | ![编排](.image/banner/banner1014.png) |  |
+| ![Модель вещи](.image/banner/banner1149.jpg) | ![Определение](.image/banner/banner1150.jpg) | ![Продукт](.image/banner/banner1151.jpg) |
+| ![Детали](.image/banner/banner1152.jpg) | ![Устройство](.image/banner/banner1153.jpg) | ![Детали](.image/banner/banner1154.jpg) |
+| ![Статус](.image/banner/banner1155.jpg) | ![Свойства](.image/banner/banner1156.jpg) | ![Сервис](.image/banner/banner1157.jpg) |
+| ![События](.image/banner/banner1158.jpg) | ![Тень](.image/banner/banner1159.jpg) | ![Топология](.image/banner/banner1160.jpg) |
+| ![Подустройства](.image/banner/banner1161.jpg) | ![Группы](.image/banner/banner1162.jpg) | ![Управление](.image/banner/banner1163.jpg) |
+| ![Телеметрия](.image/banner/banner1164.jpg) | ![История](.image/banner/banner1165.jpg) | ![Протокол](.image/banner/banner1166.jpg) |
+| ![Соединение](.image/banner/banner1167.jpg) | ![Аутентификация](.image/banner/banner1168.jpg) | ![Отладка](.image/banner/banner1169.jpg) |
+| ![Функции](.image/banner/banner1170.jpg) | ![Чтение/Запись](.image/banner/banner1171.jpg) | ![Сервис](.image/banner/banner1172.jpg) |
+| ![Подписка](.image/banner/banner1173.jpg) | ![Журналы](.image/banner/banner1174.jpg) | ![Онлайн](.image/banner/banner1175.jpg) |
+| ![Статистика](.image/banner/banner1176.jpg) | ![Обзор](.image/banner/banner1177.jpg) | ![Панель](.image/banner/banner1178.jpg) |
+| ![Продукт](.image/banner/banner1006.jpg) | ![Устройство](.image/banner/banner1009.jpg) | ![OTA](.image/banner/banner1179.jpg) |
+| ![Прошивка](.image/banner/banner1180.jpg) | ![Задача](.image/banner/banner1181.jpg) | ![Прогресс](.image/banner/banner1182.jpg) |
+| ![Правила](.image/banner/banner1013.jpg) | ![Оркестрация](.image/banner/banner1014.png) |  |
 
 #### 🖥️ Кластер
 
 | | | |
 |:---:|:---:|:---:|
-| ![概览](.image/banner/banner1127.jpg) | ![算力](.image/banner/banner1128.jpg) | ![节点](.image/banner/banner1129.jpg) |
-| ![详情](.image/banner/banner1130.jpg) | ![监控](.image/banner/banner1131.jpg) | ![调度](.image/banner/banner1132.jpg) |
-| ![列表](.image/banner/banner1133.jpg) | ![状态](.image/banner/banner1134.jpg) | ![配置](.image/banner/banner1135.jpg) |
-| ![分配](.image/banner/banner1136.jpg) |  |  |
+| ![Обзор](.image/banner/banner1127.jpg) | ![Вычислительная мощность](.image/banner/banner1128.jpg) | ![Узел](.image/banner/banner1129.jpg) |
+| ![Детали](.image/banner/banner1130.jpg) | ![Мониторинг](.image/banner/banner1131.jpg) | ![Планирование](.image/banner/banner1132.jpg) |
+| ![Список](.image/banner/banner1133.jpg) | ![Статус](.image/banner/banner1134.jpg) | ![Конфигурация](.image/banner/banner1135.jpg) |
+| ![Распределение](.image/banner/banner1136.jpg) |  |  |
 
 #### 🔔 Тревоги
 
 | | | |
 |:---:|:---:|:---:|
-| ![事件](.image/banner/banner1089.jpg) | ![处理](.image/banner/banner1090.jpg) | ![通知](.image/banner/banner1029.jpg) |
-| ![配置](.image/banner/banner1030.jpg) | ![列表](.image/banner/banner1072.jpg) | ![详情](.image/banner/banner1031.jpg) |
-| ![处置](.image/banner/banner1070.jpg) | ![统计](.image/banner/banner1071.jpg) |  |
+| ![События](.image/banner/banner1089.jpg) | ![Обработка](.image/banner/banner1090.jpg) | ![Уведомление](.image/banner/banner1029.jpg) |
+| ![Конфигурация](.image/banner/banner1030.jpg) | ![Список](.image/banner/banner1072.jpg) | ![Детали](.image/banner/banner1031.jpg) |
+| ![Обработка](.image/banner/banner1070.jpg) | ![Статистика](.image/banner/banner1071.jpg) |  |
 
 #### ⚙️ Система
 
 | | | |
 |:---:|:---:|:---:|
-| ![标识](.image/banner/banner1143.jpg) | ![重置](.image/banner/banner1144.jpg) | ![用户](.image/banner/banner1003.png) |
-| ![权限](.image/banner/banner1004.png) | ![菜单](.image/banner/banner1005.png) | ![配置](.image/banner/banner1002.png) |
+| ![Брендинг](.image/banner/banner1143.jpg) | ![Сброс](.image/banner/banner1144.jpg) | ![Пользователи](.image/banner/banner1003.png) |
+| ![Права](.image/banner/banner1004.png) | ![Меню](.image/banner/banner1005.png) | ![Конфигурация](.image/banner/banner1002.png) |
 
 #### 📱 APP
 
 | | | |
 |:---:|:---:|:---:|
-| ![首页](.image/banner/app/app_1000.jpg) | ![监控](.image/banner/app/app_1001.jpg) | ![预览](.image/banner/app/app_1002.jpg) |
-| ![告警](.image/banner/app/app_1003.jpg) | ![回放](.image/banner/app/app_1004.jpg) | ![设备](.image/banner/app/app_1005.jpg) |
-| ![消息](.image/banner/app/app_1006.jpg) | ![我的](.image/banner/app/app_1007.jpg) |  |
+| ![Главная](.image/banner/app/app_1000.jpg) | ![Мониторинг](.image/banner/app/app_1001.jpg) | ![Просмотр](.image/banner/app/app_1002.jpg) |
+| ![Тревоги](.image/banner/app/app_1003.jpg) | ![Воспроизведение](.image/banner/app/app_1004.jpg) | ![Устройство](.image/banner/app/app_1005.jpg) |
+| ![Сообщения](.image/banner/app/app_1006.jpg) | ![Профиль](.image/banner/app/app_1007.jpg) |  |
 
 ## 📞 Контакты
 
