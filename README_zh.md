@@ -552,6 +552,14 @@ EasyAIoT是一个开源学习项目，与商业行为无关。用户在使用该
   <img src=".image/banner/banner-video1001.gif" alt="演示" width="49%">
 </div>
 
+#### 🖥️ 监控大屏
+
+| | | |
+|:---:|:---:|:---:|
+| ![态势](.image/banner/banner1001.png) | ![总览](.image/banner/banner1076.jpg) | ![告警](.image/banner/banner1074.jpg) |
+| ![看板](.image/banner/banner1075.jpg) | ![多维](.image/banner/banner1095.jpg) | ![综合](.image/banner/banner1096.jpg) |
+| ![监控](.image/banner/banner1078.jpg) | ![实时](.image/banner/banner1077.jpg) |  |
+
 #### 📺 可视化组态
 
 | | | |
@@ -560,14 +568,6 @@ EasyAIoT是一个开源学习项目，与商业行为无关。用户在使用该
 | ![预览](.image/banner/banner1188.png) | ![组件](.image/banner/banner1189.png) | ![数据源](.image/banner/banner1190.png) |
 | ![发布](.image/banner/banner1191.png) | ![运行](.image/banner/banner1192.png) | ![模板](.image/banner/banner1193.png) |
 | ![资产](.image/banner/banner1194.png) | ![大屏](.image/banner/banner1195.png) | ![展示](.image/banner/banner1196.png) |
-
-#### 🖥️ 监控大屏
-
-| | | |
-|:---:|:---:|:---:|
-| ![态势](.image/banner/banner1001.png) | ![总览](.image/banner/banner1076.jpg) | ![告警](.image/banner/banner1074.jpg) |
-| ![看板](.image/banner/banner1075.jpg) | ![多维](.image/banner/banner1095.jpg) | ![综合](.image/banner/banner1096.jpg) |
-| ![监控](.image/banner/banner1078.jpg) | ![实时](.image/banner/banner1077.jpg) |  |
 
 #### 🤖 AI 视觉
 
