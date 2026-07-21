@@ -580,7 +580,7 @@ EasyAIoT是一个开源学习项目，与商业行为无关。用户在使用该
 | ![画面](.image/banner/banner1064.jpg) | ![分析](.image/banner/banner1065.jpg) | ![结果](.image/banner/banner1066.jpg) |
 | ![回看](.image/banner/banner1067.jpg) | ![实况](.image/banner/banner1052.jpg) | ![智能](.image/banner/banner1054.jpg) |
 
-#### 🧠 大模型
+#### 🧠 AI模型
 
 | | | |
 |:---:|:---:|:---:|
