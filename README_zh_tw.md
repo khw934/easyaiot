@@ -569,41 +569,6 @@ EasyAIoT是一個開源學習項目，與商業行爲無關。用戶在使用該
 | ![發佈](.image/banner/banner1191.png) | ![運行](.image/banner/banner1192.png) | ![模板](.image/banner/banner1193.png) |
 | ![資產](.image/banner/banner1194.png) | ![大屏](.image/banner/banner1195.png) | ![展示](.image/banner/banner1196.png) |
 
-#### 🤖 AI 視覺
-
-| | | |
-|:---:|:---:|:---:|
-| ![姿態](.image/banner/banner1147.jpg) | ![識別](.image/banner/banner1148.jpg) | ![任務](.image/banner/banner1085.jpg) |
-| ![配置](.image/banner/banner1086.jpg) | ![詳情](.image/banner/banner1087.jpg) | ![運行](.image/banner/banner1088.jpg) |
-| ![區域](.image/banner/banner1079.jpg) | ![檢測框](.image/banner/banner1080.jpg) | ![佈防](.image/banner/banner1081.jpg) |
-| ![預覽](.image/banner/banner1082.jpg) | ![算法](.image/banner/banner1062.jpg) | ![創建](.image/banner/banner1063.png) |
-| ![畫面](.image/banner/banner1064.jpg) | ![分析](.image/banner/banner1065.jpg) | ![結果](.image/banner/banner1066.jpg) |
-| ![回看](.image/banner/banner1067.jpg) | ![實況](.image/banner/banner1052.jpg) | ![智能](.image/banner/banner1054.jpg) |
-
-#### 🧠 AI模型
-
-| | | |
-|:---:|:---:|:---:|
-| ![Qwen](.image/banner/banner1093.jpg) | ![視覺模型](.image/banner/banner1094.jpg) | ![列表](.image/banner/banner1099.png) |
-| ![配置](.image/banner/banner1100.png) | ![詳情](.image/banner/banner1101.png) | ![調用](.image/banner/banner1102.png) |
-| ![訓練](.image/banner/banner1019.jpg) | ![任務](.image/banner/banner1020.jpg) | ![列表](.image/banner/banner1023.jpg) |
-| ![進度](.image/banner/banner1024.jpg) | ![參數](.image/banner/banner1017.jpg) | ![評估](.image/banner/banner1018.jpg) |
-| ![詳情](.image/banner/banner1021.jpg) | ![日誌](.image/banner/banner1022.jpg) | ![管理](.image/banner/banner1097.png) |
-| ![倉庫](.image/banner/banner1098.png) | ![版本](.image/banner/banner1039.jpg) | ![資產](.image/banner/banner1061.jpg) |
-| ![推理](.image/banner/banner1040.jpg) | ![配置](.image/banner/banner1042.jpg) | ![結果](.image/banner/banner1043.jpg) |
-| ![在線](.image/banner/banner1044.jpg) | ![批量](.image/banner/banner1047.jpg) | ![監控](.image/banner/banner1048.jpg) |
-| ![服務](.image/banner/banner1045.jpg) | ![部署](.image/banner/banner1046.jpg) | ![集羣](.image/banner/banner1049.jpg) |
-| ![調用](.image/banner/banner1050.jpg) | ![權重](.image/banner/banner1111.png) | ![下載](.image/banner/banner1112.png) |
-
-#### 📦 數據集
-
-| | | |
-|:---:|:---:|:---:|
-| ![管理](.image/banner/banner1015.png) | ![列表](.image/banner/banner1010.jpg) | ![標註](.image/banner/banner1027.png) |
-| ![任務](.image/banner/banner1016.jpg) | ![工具](.image/banner/banner1059.jpg) | ![預覽](.image/banner/banner1060.jpg) |
-| ![詳情](.image/banner/banner1107.png) | ![導入](.image/banner/banner1108.png) | ![項目](.image/banner/banner1109.png) |
-| ![審覈](.image/banner/banner1110.png) | ![創建](.image/banner/banner1007.jpg) | ![樣本](.image/banner/banner1008.jpg) |
-
 #### 📹 視頻監控
 
 | | | |
@@ -620,7 +585,37 @@ EasyAIoT是一個開源學習項目，與商業行爲無關。用戶在使用該
 | ![預覽](.image/banner/banner1104.png) | ![接入](.image/banner/banner1105.png) | ![NVR](.image/banner/banner1106.png) |
 | ![實況](.image/banner/banner1183.jpg) | ![地圖](.image/banner/banner1184.jpg) |  |
 
-#### 🔌 IoT
+#### 🧠 AI模型
+
+| | | |
+|:---:|:---:|:---:|
+| ![Qwen](.image/banner/banner1093.jpg) | ![視覺模型](.image/banner/banner1094.jpg) | ![列表](.image/banner/banner1099.png) |
+| ![配置](.image/banner/banner1100.png) | ![詳情](.image/banner/banner1101.png) | ![調用](.image/banner/banner1102.png) |
+| ![訓練](.image/banner/banner1019.jpg) | ![任務](.image/banner/banner1020.jpg) | ![列表](.image/banner/banner1023.jpg) |
+| ![進度](.image/banner/banner1024.jpg) | ![參數](.image/banner/banner1017.jpg) | ![評估](.image/banner/banner1018.jpg) |
+| ![詳情](.image/banner/banner1021.jpg) | ![日誌](.image/banner/banner1022.jpg) | ![管理](.image/banner/banner1097.png) |
+| ![倉庫](.image/banner/banner1098.png) | ![版本](.image/banner/banner1039.jpg) | ![資產](.image/banner/banner1061.jpg) |
+| ![推理](.image/banner/banner1040.jpg) | ![配置](.image/banner/banner1042.jpg) | ![結果](.image/banner/banner1043.jpg) |
+| ![在線](.image/banner/banner1044.jpg) | ![批量](.image/banner/banner1047.jpg) | ![監控](.image/banner/banner1048.jpg) |
+| ![服務](.image/banner/banner1045.jpg) | ![部署](.image/banner/banner1046.jpg) | ![集羣](.image/banner/banner1049.jpg) |
+| ![調用](.image/banner/banner1050.jpg) | ![權重](.image/banner/banner1111.png) | ![下載](.image/banner/banner1112.png) |
+| ![姿態](.image/banner/banner1147.jpg) | ![識別](.image/banner/banner1148.jpg) | ![任務](.image/banner/banner1085.jpg) |
+| ![配置](.image/banner/banner1086.jpg) | ![詳情](.image/banner/banner1087.jpg) | ![運行](.image/banner/banner1088.jpg) |
+| ![區域](.image/banner/banner1079.jpg) | ![檢測框](.image/banner/banner1080.jpg) | ![佈防](.image/banner/banner1081.jpg) |
+| ![預覽](.image/banner/banner1082.jpg) | ![算法](.image/banner/banner1062.jpg) | ![創建](.image/banner/banner1063.png) |
+| ![畫面](.image/banner/banner1064.jpg) | ![分析](.image/banner/banner1065.jpg) | ![結果](.image/banner/banner1066.jpg) |
+| ![回看](.image/banner/banner1067.jpg) | ![實況](.image/banner/banner1052.jpg) | ![智能](.image/banner/banner1054.jpg) |
+
+#### 📦 數據集
+
+| | | |
+|:---:|:---:|:---:|
+| ![管理](.image/banner/banner1015.png) | ![列表](.image/banner/banner1010.jpg) | ![標註](.image/banner/banner1027.png) |
+| ![任務](.image/banner/banner1016.jpg) | ![工具](.image/banner/banner1059.jpg) | ![預覽](.image/banner/banner1060.jpg) |
+| ![詳情](.image/banner/banner1107.png) | ![導入](.image/banner/banner1108.png) | ![項目](.image/banner/banner1109.png) |
+| ![審覈](.image/banner/banner1110.png) | ![創建](.image/banner/banner1007.jpg) | ![樣本](.image/banner/banner1008.jpg) |
+
+#### 🔌 物聯網
 
 | | | |
 |:---:|:---:|:---:|
@@ -634,14 +629,9 @@ EasyAIoT是一個開源學習項目，與商業行爲無關。用戶在使用該
 | ![功能](.image/banner/banner1170.jpg) | ![讀寫](.image/banner/banner1171.jpg) | ![服務](.image/banner/banner1172.jpg) |
 | ![訂閱](.image/banner/banner1173.jpg) | ![日誌](.image/banner/banner1174.jpg) | ![在線](.image/banner/banner1175.jpg) |
 | ![統計](.image/banner/banner1176.jpg) | ![總覽](.image/banner/banner1177.jpg) | ![看板](.image/banner/banner1178.jpg) |
-| ![產品](.image/banner/banner1006.jpg) | ![設備](.image/banner/banner1009.jpg) |  |
-
-#### 🚀 OTA / 規則
-
-| | | |
-|:---:|:---:|:---:|
-| ![OTA](.image/banner/banner1179.jpg) | ![固件](.image/banner/banner1180.jpg) | ![任務](.image/banner/banner1181.jpg) |
-| ![進度](.image/banner/banner1182.jpg) | ![規則](.image/banner/banner1013.jpg) | ![編排](.image/banner/banner1014.png) |
+| ![產品](.image/banner/banner1006.jpg) | ![設備](.image/banner/banner1009.jpg) | ![OTA](.image/banner/banner1179.jpg) |
+| ![固件](.image/banner/banner1180.jpg) | ![任務](.image/banner/banner1181.jpg) | ![進度](.image/banner/banner1182.jpg) |
+| ![規則](.image/banner/banner1013.jpg) | ![編排](.image/banner/banner1014.png) |  |
 
 #### 🖥️ 集羣
 
