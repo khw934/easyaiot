@@ -1,0 +1,5 @@
+# pnpm 11+：构建脚本需显式放行（见 https://pnpm.io/settings#allowbuilds）
+allowBuilds:
+  esbuild: true
+  vue-demi: true
+  vue-echarts: true
